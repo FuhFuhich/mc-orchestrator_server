@@ -5,15 +5,11 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 @Data
-public class RegisterRequest {
+public class ChangePasswordRequest {
     @NotBlank
-    @Size(min = 3, max = 32)
-    private String username;
-
-    private String email;
-    private String phoneNumber;
+    private String currentPassword;
 
     @NotBlank
     @Size(min = 6)
-    private String password;
+    private String newPassword;
 }

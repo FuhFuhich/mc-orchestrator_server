@@ -1,9 +1,13 @@
 package com.example.mine_com_server.dto.request;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 @Data
 public class LoginRequest {
-    private String email;
+    @NotBlank
+    private String identity;
+
+    @NotBlank
     private String password;
 }

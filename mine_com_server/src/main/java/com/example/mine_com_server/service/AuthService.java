@@ -14,6 +14,8 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.example.mine_com_server.dto.request.UpdateProfileRequest;
+import com.example.mine_com_server.dto.request.ChangePasswordRequest;
 
 import java.util.UUID;
 
@@ -29,12 +31,15 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final RefreshTokenService refreshTokenService;
 
-    // ===== РЕГИСТРАЦИЯ =====
-
     @Transactional
     public AuthResponse register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.getEmail())) {
+        if (request.getEmail() != null && !request.getEmail().isBlank()
+                && userRepository.existsByEmail(request.getEmail())) {
             throw new IllegalStateException("Email уже занят: " + request.getEmail());
+        }
+        if (request.getPhoneNumber() != null && !request.getPhoneNumber().isBlank()
+                && userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
+            throw new IllegalStateException("Телефон уже занят: " + request.getPhoneNumber());
         }
         if (userRepository.existsByUsername(request.getUsername())) {
             throw new IllegalStateException("Имя пользователя занято: " + request.getUsername());
@@ -50,15 +55,18 @@ public class AuthService {
                 .build();
 
         user = userRepository.save(user);
-        log.info("[AUTH] Зарегистрирован: {}", user.getEmail());
+        log.info("[AUTH] Зарегистрирован: {}", user.getUsername());
         return buildAuthResponse(user);
     }
 
-    // ===== ЛОГИН =====
-
     @Transactional
     public AuthResponse login(LoginRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
+        String identity = request.getIdentity();
+
+        // Ищем пользователя по email, username или телефону
+        User user = userRepository.findByEmail(identity)
+                .or(() -> userRepository.findByUsername(identity))
+                .or(() -> userRepository.findByPhoneNumber(identity))
                 .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
 
         authenticationManager.authenticate(
@@ -72,8 +80,6 @@ public class AuthService {
         return buildAuthResponse(user);
     }
 
-    // ===== REFRESH =====
-
     @Transactional
     public AuthResponse refresh(String refreshTokenValue) {
         UUID userId = refreshTokenService.validate(refreshTokenValue);
@@ -82,15 +88,11 @@ public class AuthService {
         return buildAuthResponse(user);
     }
 
-    // ===== LOGOUT =====
-
     @Transactional
     public void logout(UUID userId) {
         refreshTokenService.revokeByUserId(userId);
         log.info("[AUTH] Выход: {}", userId);
     }
-
-    // ===== ME =====
 
     public UserResponse getMe(UUID userId) {
         User user = userRepository.findById(userId)
@@ -98,18 +100,51 @@ public class AuthService {
         return toUserResponse(user);
     }
 
-    // ===== УТИЛИТЫ =====
-
     private AuthResponse buildAuthResponse(User user) {
         String accessToken  = jwtService.generateToken(user.getId());
         String refreshToken = refreshTokenService.create(user.getId());
-        return new AuthResponse(
-                accessToken,
-                refreshToken,
-                user.getUsername(),
-                user.getEmail(),
-                user.getRole()
+        return new AuthResponse(accessToken, refreshToken, user.getUsername(), user.getEmail(), user.getRole());
+    }
+
+    @Transactional
+    public UserResponse updateMe(UUID userId, UpdateProfileRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+
+        if (request.getUsername() != null && !request.getUsername().equals(user.getUsername())) {
+            if (userRepository.existsByUsername(request.getUsername()))
+                throw new IllegalStateException("Имя пользователя занято");
+            user.setUsername(request.getUsername());
+        }
+        if (request.getEmail() != null && !request.getEmail().equals(user.getEmail())) {
+            if (userRepository.existsByEmail(request.getEmail()))
+                throw new IllegalStateException("Email уже занят");
+            user.setEmail(request.getEmail());
+        }
+        if (request.getPhoneNumber() != null) {
+            user.setPhoneNumber(request.getPhoneNumber());
+        }
+
+        user = userRepository.save(user);
+        log.info("[USER] Профиль обновлён: {}", user.getUsername());
+        return toUserResponse(user);
+    }
+
+    @Transactional
+    public void changePassword(UUID userId, ChangePasswordRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(
+                        userId.toString(),
+                        request.getCurrentPassword()
+                )
         );
+
+        user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
+        log.info("[USER] Пароль изменён: {}", user.getUsername());
     }
 
     private UserResponse toUserResponse(User user) {
@@ -121,6 +156,7 @@ public class AuthService {
         r.setRole(user.getRole());
         r.setIsActive(user.getIsActive());
         r.setCreatedAt(user.getCreatedAt());
+        r.setAvatarUrl(user.getAvatarUrl());
         return r;
     }
 }
