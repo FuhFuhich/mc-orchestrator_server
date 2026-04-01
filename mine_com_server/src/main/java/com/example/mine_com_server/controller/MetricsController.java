@@ -24,7 +24,6 @@ public class MetricsController {
     private final MinecraftServerService mcServerService;
     private final NodeAccessService nodeAccessService;
 
-    // GET /api/metrics/{mcServerId}/latest (VIEWER+)
     @GetMapping("/{mcServerId}/latest")
     public ResponseEntity<MetricsResponse> getLatest(
             @PathVariable UUID mcServerId,
@@ -35,7 +34,6 @@ public class MetricsController {
         return ResponseEntity.ok(metricsService.getLatest(mcServerId));
     }
 
-    // GET /api/metrics/{mcServerId}/history?hours=24&page=0&size=100 (VIEWER+)
     @GetMapping("/{mcServerId}/history")
     public ResponseEntity<Page<MetricsResponse>> getHistory(
             @PathVariable UUID mcServerId,
@@ -49,7 +47,6 @@ public class MetricsController {
         return ResponseEntity.ok(metricsService.getHistory(mcServerId, hours, page, size));
     }
 
-    // GET /api/metrics/node/{nodeId}?hours=6&page=0&size=50 (VIEWER+)
     @GetMapping("/node/{nodeId}")
     public ResponseEntity<Page<MetricsResponse>> getByNode(
             @PathVariable UUID nodeId,
@@ -63,7 +60,6 @@ public class MetricsController {
         return ResponseEntity.ok(metricsService.getByNode(nodeId, hours, page, size));
     }
 
-    // POST /api/metrics/{mcServerId}/collect — ручной сбор (ADMIN+)
     @PostMapping("/{mcServerId}/collect")
     public ResponseEntity<MetricsResponse> collectNow(
             @PathVariable UUID mcServerId,

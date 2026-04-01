@@ -1,15 +1,18 @@
 package com.example.mine_com_server.service;
 
 import com.example.mine_com_server.dto.request.ServerRequest;
+import com.example.mine_com_server.dto.response.NodeMemberResponse;
 import com.example.mine_com_server.dto.response.ServerResponse;
 import com.example.mine_com_server.exception.NotFoundException;
-import com.example.mine_com_server.model.*;
+import com.example.mine_com_server.model.NodeMember;
+import com.example.mine_com_server.model.NodeRole;
+import com.example.mine_com_server.model.Server;
+import com.example.mine_com_server.model.User;
 import com.example.mine_com_server.repository.NodeMemberRepository;
 import com.example.mine_com_server.repository.ServerRepository;
 import com.example.mine_com_server.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,21 +32,19 @@ public class ServerService {
     private final SshService sshService;
     private final HardwareService hardwareService;
 
-    // ===== ПОЛУЧИТЬ ВСЕ НОДЫ ПОЛЬЗОВАТЕЛЯ =====
-
     public List<ServerResponse> getAllByUser(UUID userId) {
         return nodeMemberRepository.findAllByUserId(userId).stream()
-                .map(nm -> toResponse(nm.getNode()))
+                .map(nodeMember -> toResponse(nodeMember.getNode(), userId))
                 .toList();
     }
 
-    // ===== ПОЛУЧИТЬ НОДУ ПО ID =====
-
-    public ServerResponse getById(UUID serverId) {
-        return toResponse(findOrThrow(serverId));
+    public ServerResponse getById(UUID serverId, UUID requestingUserId) {
+        return toResponse(findOrThrow(serverId), requestingUserId);
     }
 
-    // ===== СОЗДАТЬ НОДУ =====
+    public boolean exists(UUID serverId) {
+        return serverRepository.existsById(serverId);
+    }
 
     @Transactional
     public ServerResponse create(ServerRequest request, UUID userId) {
@@ -65,14 +66,13 @@ public class ServerService {
 
         server = serverRepository.save(server);
 
-        // Назначаем создателя OWNER
-        nodeMemberRepository.save(NodeMember.builder()
-                .node(server)
-                .user(user)
-                .role(NodeRole.OWNER)
-                .build());
-
-        log.info("Нода создана: {} ({}), owner: {}", server.getName(), server.getIpAddress(), userId);
+        nodeMemberRepository.save(
+                NodeMember.builder()
+                        .node(server)
+                        .user(user)
+                        .role(NodeRole.OWNER)
+                        .build()
+        );
 
         final UUID serverId = server.getId();
         CompletableFuture.runAsync(() -> {
@@ -83,10 +83,8 @@ public class ServerService {
             }
         });
 
-        return toResponse(server);
+        return toResponse(server, userId);
     }
-
-    // ===== ОБНОВИТЬ НОДУ =====
 
     @Transactional
     public ServerResponse update(UUID serverId, ServerRequest request) {
@@ -94,115 +92,100 @@ public class ServerService {
 
         server.setName(request.getName());
         server.setIpAddress(request.getIpAddress());
-        if (request.getSshPort() != null) server.setSshPort(request.getSshPort());
+        server.setSshPort(request.getSshPort() != null ? request.getSshPort() : server.getSshPort());
         server.setSshUser(request.getSshUser());
         server.setAuthType(request.getAuthType());
-        if (request.getSshPrivateKey() != null) server.setSshPrivateKey(request.getSshPrivateKey());
-        if (request.getSshPassword() != null) server.setSshPassword(request.getSshPassword());
+        server.setSshPrivateKey(request.getSshPrivateKey());
+        server.setSshPassword(request.getSshPassword());
         server.setDescription(request.getDescription());
         server.setOs(request.getOs());
 
-        return toResponse(serverRepository.save(server));
+        return toResponse(serverRepository.save(server), null);
     }
-
-    // ===== УДАЛИТЬ НОДУ (мягкое удаление) =====
 
     @Transactional
-    public void delete(UUID serverId) {
-        Server server = findOrThrow(serverId);
-        server.setIsActive(false);
-        serverRepository.save(server);
-
-        sshService.closeSession(serverId);
-
-        log.info("Нода деактивирована: {}", serverId);
+    public void delete(UUID id) {
+        nodeMemberRepository.deleteAllByNodeId(id);
+        serverRepository.delete(findOrThrow(id));
+        sshService.closeSession(id);
     }
 
-    // ===== ПРОВЕРИТЬ ДОСТУПНОСТЬ НОДЫ =====
-
-    @Async("mc-async-")
-    public CompletableFuture<Boolean> checkReachability(UUID serverId) {
-        Server server = findOrThrow(serverId);
-        boolean reachable = sshService.isReachable(server);
-        log.info("Проверка ноды {}: {}", server.getIpAddress(), reachable ? "доступна" : "недоступна");
-        return CompletableFuture.completedFuture(reachable);
+    public java.util.Map<String, Object> checkReachabilitySync(UUID id) {
+        return sshService.pingTcp(findOrThrow(id));
     }
 
-    // ===== ДОБАВИТЬ УЧАСТНИКА К НОДЕ =====
+    public List<NodeMemberResponse> getMembers(UUID nodeId) {
+        return nodeMemberRepository.findAllByNodeIdWithUser(nodeId).stream()
+                .map(nodeMember -> {
+                    NodeMemberResponse response = new NodeMemberResponse();
+                    response.setUserId(nodeMember.getUser().getId());
+                    response.setUsername(nodeMember.getUser().getUsername());
+                    response.setEmail(nodeMember.getUser().getEmail());
+                    response.setRole(nodeMember.getRole().name());
+                    response.setCreatedAt(nodeMember.getCreatedAt());
+                    return response;
+                })
+                .toList();
+    }
 
     @Transactional
-    public void addMember(UUID serverId, UUID targetUserId, NodeRole role) {
-        if (nodeMemberRepository.findByNodeIdAndUserId(serverId, targetUserId).isPresent()) {
-            throw new IllegalStateException("Пользователь уже имеет доступ к этой ноде");
+    public void addMember(UUID nodeId, UUID targetUserId, NodeRole role) {
+        if (nodeMemberRepository.existsByNodeIdAndUserId(nodeId, targetUserId)) {
+            throw new IllegalStateException("Пользователь уже является участником ноды");
         }
 
         User user = userRepository.findById(targetUserId)
                 .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
-        Server server = findOrThrow(serverId);
 
-        nodeMemberRepository.save(NodeMember.builder()
-                .node(server)
-                .user(user)
-                .role(role)
-                .build());
+        Server node = findOrThrow(nodeId);
 
-        log.info("Участник {} добавлен к ноде {} с ролью {}", targetUserId, serverId, role);
+        nodeMemberRepository.save(
+                NodeMember.builder()
+                        .node(node)
+                        .user(user)
+                        .role(role)
+                        .build()
+        );
     }
 
-    // ===== УБРАТЬ УЧАСТНИКА С НОДЫ =====
-
     @Transactional
-    public void removeMember(UUID serverId, UUID targetUserId) {
-        if (!nodeMemberRepository.findByNodeIdAndUserId(serverId, targetUserId).isPresent()) {
-            throw new NotFoundException("Участник не найден");
-        }
-        nodeMemberRepository.deleteByNodeIdAndUserId(serverId, targetUserId);
-        log.info("Участник {} удалён с ноды {}", targetUserId, serverId);
-    }
+    public void updateMemberRole(UUID nodeId, UUID targetUserId, NodeRole role) {
+        NodeMember member = nodeMemberRepository.findByNodeIdAndUserId(nodeId, targetUserId)
+                .orElseThrow(() -> new NotFoundException("Участник ноды не найден"));
 
-    // ===== ИЗМЕНИТЬ РОЛЬ УЧАСТНИКА =====
-
-    @Transactional
-    public void updateMemberRole(UUID serverId, UUID targetUserId, NodeRole newRole) {
-        NodeMember member = nodeMemberRepository.findByNodeIdAndUserId(serverId, targetUserId)
-                .orElseThrow(() -> new NotFoundException("Участник не найден"));
-
-        if (member.getRole() == NodeRole.OWNER) {
-            throw new IllegalStateException("Нельзя изменить роль OWNER");
-        }
-
-        member.setRole(newRole);
+        member.setRole(role);
         nodeMemberRepository.save(member);
-
-        log.info("Роль участника {} на ноде {} изменена на {}", targetUserId, serverId, newRole);
     }
 
-    // ===== СПИСОК УЧАСТНИКОВ НОДЫ =====
-
-    public List<NodeMember> getMembers(UUID serverId) {
-        return nodeMemberRepository.findAllByNodeId(serverId);
+    @Transactional
+    public void removeMember(UUID nodeId, UUID targetUserId) {
+        nodeMemberRepository.deleteByNodeIdAndUserId(nodeId, targetUserId);
     }
 
-    // ===== УТИЛИТЫ =====
-
-    public Server findOrThrow(UUID serverId) {
+    private Server findOrThrow(UUID serverId) {
         return serverRepository.findById(serverId)
                 .orElseThrow(() -> new NotFoundException("Нода не найдена: " + serverId));
     }
 
-    public ServerResponse toResponse(Server s) {
-        ServerResponse r = new ServerResponse();
-        r.setId(s.getId());
-        r.setName(s.getName());
-        r.setIpAddress(s.getIpAddress());
-        r.setSshPort(s.getSshPort());
-        r.setSshUser(s.getSshUser());
-        r.setAuthType(s.getAuthType());
-        r.setDescription(s.getDescription());
-        r.setOs(s.getOs());
-        r.setIsActive(s.getIsActive());
-        r.setCreatedAt(s.getCreatedAt());
-        r.setUpdatedAt(s.getUpdatedAt());
-        return r;
+    private ServerResponse toResponse(Server server, UUID requestingUserId) {
+        ServerResponse response = new ServerResponse();
+        response.setId(server.getId());
+        response.setName(server.getName());
+        response.setIpAddress(server.getIpAddress());
+        response.setSshPort(server.getSshPort());
+        response.setSshUser(server.getSshUser());
+        response.setAuthType(server.getAuthType());
+        response.setDescription(server.getDescription());
+        response.setOs(server.getOs());
+        response.setIsActive(server.getIsActive());
+        response.setCreatedAt(server.getCreatedAt());
+        response.setUpdatedAt(server.getUpdatedAt());
+
+        if (requestingUserId != null) {
+            nodeMemberRepository.findByNodeIdAndUserId(server.getId(), requestingUserId)
+                    .ifPresent(nodeMember -> response.setMyRole(nodeMember.getRole().name()));
+        }
+
+        return response;
     }
 }

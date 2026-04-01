@@ -56,8 +56,6 @@ public class HardwareService {
                 .orElseThrow(() -> new NotFoundException("Hardware не найден для ноды: " + nodeId));
     }
 
-    // ===== ПАРСИНГ CPU =====
-
     private String parseCpuModel(Server server) {
         try {
             return sshService.execute(server,
@@ -101,8 +99,6 @@ public class HardwareService {
         }
     }
 
-    // ===== ПАРСИНГ RAM =====
-
     private Long parseRamTotal(Server server) {
         try {
             String out = sshService.execute(server,
@@ -124,8 +120,6 @@ public class HardwareService {
             return null;
         }
     }
-
-    // ===== ПАРСИНГ ДИСКОВ =====
 
     private List<DiskInfo> parseDisks(Server server) {
         List<DiskInfo> disks = new ArrayList<>();
@@ -172,8 +166,6 @@ public class HardwareService {
         }
     }
 
-    // ===== ПАРСИНГ ОС =====
-
     private String parseOsName(Server server) {
         try {
             return sshService.execute(server,
@@ -202,8 +194,6 @@ public class HardwareService {
             return null;
         }
     }
-
-    // ===== ПАРСИНГ GPU =====
 
     private String parseGpu(Server server) {
         try {

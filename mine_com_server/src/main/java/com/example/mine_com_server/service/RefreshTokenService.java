@@ -1,71 +1,74 @@
 package com.example.mine_com_server.service;
 
-import com.example.mine_com_server.exception.ForbiddenException;
 import com.example.mine_com_server.model.RefreshToken;
+import com.example.mine_com_server.model.User;
 import com.example.mine_com_server.repository.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
+import java.util.Optional;
 import java.util.UUID;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class RefreshTokenService {
-
-    @Value("${app.refresh-token.expiration-days:30}")
-    private int expirationDays;
 
     private final RefreshTokenRepository refreshTokenRepository;
 
-    // ===== СОЗДАТЬ =====
+    @Value("${app.refresh-token.expiration-days:30}")
+    private long refreshTokenExpirationDays;
 
     @Transactional
-    public String create(UUID userId) {
-        refreshTokenRepository.deleteByUserId(userId);
+    public String create(User user) {
+        refreshTokenRepository.deleteByUserId(user.getId());
 
-        RefreshToken token = RefreshToken.builder()
-                .userId(userId)
-                .token(UUID.randomUUID().toString())
-                .expiresAt(LocalDateTime.now().plusDays(expirationDays))
+        String rawToken = UUID.randomUUID() + "." + UUID.randomUUID();
+        String hashedToken = hash(rawToken);
+
+        RefreshToken refreshToken = RefreshToken.builder()
+                .token(hashedToken)
+                .user(user)
+                .createdAt(LocalDateTime.now())
+                .expiresAt(LocalDateTime.now().plusDays(refreshTokenExpirationDays))
                 .build();
 
-        return refreshTokenRepository.save(token).getToken();
+        refreshTokenRepository.save(refreshToken);
+        return rawToken;
     }
 
-    // ===== ВАЛИДИРОВАТЬ И ВЕРНУТЬ userId =====
-
-    @Transactional
-    public UUID validate(String tokenValue) {
-        RefreshToken token = refreshTokenRepository.findByToken(tokenValue)
-                .orElseThrow(() -> new ForbiddenException("Невалидный refresh token"));
-
-        if (token.getExpiresAt().isBefore(LocalDateTime.now())) {
-            refreshTokenRepository.delete(token);
-            throw new ForbiddenException("Refresh token истёк, войдите снова");
-        }
-
-        return token.getUserId();
+    public Optional<RefreshToken> findByRawToken(String rawToken) {
+        return refreshTokenRepository.findByToken(hash(rawToken))
+                .filter(token -> token.getExpiresAt().isAfter(LocalDateTime.now()));
     }
 
-    // ===== ОТОЗВАТЬ (при logout) =====
+    @Transactional
+    public void deleteByRawToken(String rawToken) {
+        refreshTokenRepository.deleteByToken(hash(rawToken));
+    }
 
     @Transactional
-    public void revokeByUserId(UUID userId) {
+    public void deleteByUserId(UUID userId) {
         refreshTokenRepository.deleteByUserId(userId);
     }
 
-    // ===== ОЧИСТКА ПРОСРОЧЕННЫХ (раз в сутки) =====
+    public boolean isValid(String rawToken) {
+        return findByRawToken(rawToken).isPresent();
+    }
 
-    @Scheduled(cron = "0 0 4 * * *")
-    @Transactional
-    public void cleanExpired() {
-        refreshTokenRepository.deleteByExpiresAtBefore(LocalDateTime.now());
-        log.info("[REFRESH] Очистка просроченных токенов выполнена");
+    private String hash(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hashBytes);
+        } catch (Exception e) {
+            throw new IllegalStateException("Не удалось вычислить hash refresh token", e);
+        }
     }
 }

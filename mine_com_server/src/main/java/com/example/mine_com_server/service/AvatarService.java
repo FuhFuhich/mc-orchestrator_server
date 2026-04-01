@@ -33,7 +33,6 @@ public class AvatarService {
 
     @Transactional
     public UserResponse uploadAvatar(UUID userId, MultipartFile file) {
-        // Валидация
         if (file.isEmpty()) {
             throw new IllegalStateException("Файл пустой");
         }

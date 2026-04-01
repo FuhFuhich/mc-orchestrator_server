@@ -1,6 +1,7 @@
 package com.example.mine_com_server.service;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,6 +9,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.UUID;
 
@@ -20,36 +22,33 @@ public class JwtService {
     @Value("${app.jwt.expiration-ms}")
     private long expirationMs;
 
-    // ===== ГЕНЕРАЦИЯ ТОКЕНА =====
-
     public String generateToken(UUID userId) {
         return Jwts.builder()
                 .subject(userId.toString())
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationMs))
+                .claim("type", "access")
                 .signWith(getKey())
                 .compact();
     }
-
-    // ===== ИЗВЛЕЧЕНИЕ userId =====
 
     public String extractUserId(String token) {
         return extractClaims(token).getSubject();
     }
 
-    // ===== ВАЛИДАЦИЯ =====
-
     public boolean isTokenValid(String token, UserDetails userDetails) {
-        String userId = extractUserId(token);
-        return userId.equals(userDetails.getUsername())
-                && !isTokenExpired(token);
+        try {
+            Claims claims = extractClaims(token);
+            return userDetails.getUsername().equals(claims.getSubject())
+                    && "access".equals(claims.get("type", String.class))
+                    && claims.getExpiration() != null
+                    && claims.getExpiration().after(new Date());
+        } catch (JwtException | IllegalArgumentException ex) {
+            return false;
+        }
     }
 
-    private boolean isTokenExpired(String token) {
-        return extractClaims(token).getExpiration().before(new Date());
-    }
-
-    private Claims extractClaims(String token) {
+    public Claims extractClaims(String token) {
         return Jwts.parser()
                 .verifyWith(getKey())
                 .build()
@@ -58,6 +57,10 @@ public class JwtService {
     }
 
     private SecretKey getKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes());
+        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+        if (keyBytes.length < 32) {
+            throw new IllegalStateException("JWT secret должен быть минимум 32 байта для HS256");
+        }
+        return Keys.hmacShaKeyFor(keyBytes);
     }
 }

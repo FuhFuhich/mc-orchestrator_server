@@ -1,5 +1,6 @@
 package com.example.mine_com_server.service;
 
+import com.example.mine_com_server.config.RemoteConfig;
 import com.example.mine_com_server.exception.NotFoundException;
 import com.example.mine_com_server.model.MinecraftServer;
 import com.example.mine_com_server.model.Server;
@@ -7,12 +8,17 @@ import com.example.mine_com_server.repository.MinecraftServerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -21,249 +27,226 @@ import java.util.concurrent.CompletableFuture;
 @RequiredArgsConstructor
 public class DeployService {
 
-    private static final String REMOTE_SCRIPTS_DIR = "/home/sha/mc-com/scripts";
-    private static final String REMOTE_SERVERS_DIR = "/home/sha/mc-com/servers";
-    private static final String REMOTE_BACKUPS_DIR = "/home/sha/mc-com/backups";
+    private static final List<String> SCRIPT_NAMES = List.of(
+            "common.sh",
+            "deploy.sh",
+            "start.sh",
+            "stop.sh",
+            "restart.sh",
+            "status.sh",
+            "backup.sh",
+            "restore.sh",
+            "cleanup.sh",
+            "install_java.sh"
+    );
 
     private final MinecraftServerRepository mcServerRepository;
     private final SshService sshService;
-    private final MinecraftServerService mcServerService;
-
-    // ===== ПОЛНЫЙ ДЕПЛОЙ =====
+    private final RemoteConfig remoteConfig;
 
     @Async("mc-async-")
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public CompletableFuture<Void> deploy(UUID mcServerId) {
         MinecraftServer mc = findOrThrow(mcServerId);
         Server node = mc.getNode();
 
+        setStatus(mc.getId(), "deploying");
         try {
-            log.info("[DEPLOY] Начало деплоя '{}' на ноду {}", mc.getName(), node.getIpAddress());
-            setStatus(mc, "deploying");
+            prepareNode(node);
+            uploadBundle(node, mc);
 
-            prepareNode(node, mc);
-            setupServer(node, mc);
-            applyConfig(node, mc);
+            sshService.runScript(
+                    node,
+                    remoteConfig.rootFor(node),
+                    remoteConfig.scriptPath(node, "deploy.sh"),
+                    mc.getId().toString(),
+                    mc.getMinecraftVersion(),
+                    nvl(mc.getModLoader(), "vanilla"),
+                    nvl(mc.getModLoaderVersion(), "latest"),
+                    String.valueOf(mc.getGamePort()),
+                    String.valueOf(mc.getRamMb()),
+                    String.valueOf(mc.getCpuCores()),
+                    nvl(mc.getRconEnabled(), false).toString(),
+                    String.valueOf(mc.getRconPort()),
+                    nvl(mc.getRconPassword(), ""),
+                    nvl(mc.getWhitelistEnabled(), false).toString()
+            );
 
-            setStatus(mc, "starting");
-            sshService.execute(node, buildStartCommand(mc));
-            setStatus(mc, "online");
-
-            log.info("[DEPLOY] Деплой '{}' завершён успешно", mc.getName());
-
+            assertDeploySucceeded(node, mc.getId());
+            setStatus(mc.getId(), "offline");
+            log.info("[DEPLOY] Успешный деплой MC-сервера {}", mc.getId());
+            return CompletableFuture.completedFuture(null);
         } catch (Exception e) {
-            log.error("[DEPLOY] Ошибка деплоя '{}': {}", mc.getName(), e.getMessage(), e);
-            setStatus(mc, "error");
+            setStatus(mc.getId(), "error");
+            log.error("[DEPLOY] Ошибка деплоя {}: {}", mc.getId(), e.getMessage(), e);
             throw new RuntimeException("Ошибка деплоя: " + e.getMessage(), e);
         }
-
-        return CompletableFuture.completedFuture(null);
     }
 
-    // ===== РЕДЕПЛОЙ =====
-
     @Async("mc-async-")
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public CompletableFuture<Void> redeploy(UUID mcServerId) {
-        MinecraftServer mc = findOrThrow(mcServerId);
-        Server node = mc.getNode();
-
-        try {
-            log.info("[REDEPLOY] '{}' на {}", mc.getName(), node.getIpAddress());
-            setStatus(mc, "deploying");
-
-            if ("online".equals(mc.getStatus())) {
-                sshService.execute(node, buildStopCommand(mc));
-            }
-
-            setupServer(node, mc);
-            applyConfig(node, mc);
-
-            sshService.execute(node, buildStartCommand(mc));
-            setStatus(mc, "online");
-
-        } catch (Exception e) {
-            log.error("[REDEPLOY] Ошибка: {}", e.getMessage(), e);
-            setStatus(mc, "error");
-        }
-
-        return CompletableFuture.completedFuture(null);
+        return deploy(mcServerId);
     }
 
-    // ===== УДАЛЕНИЕ СЕРВЕРА С НОДЫ =====
-
     @Async("mc-async-")
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public CompletableFuture<Void> undeploy(UUID mcServerId) {
         MinecraftServer mc = findOrThrow(mcServerId);
         Server node = mc.getNode();
 
+        setStatus(mc.getId(), "stopping");
         try {
-            log.info("[UNDEPLOY] '{}' с {}", mc.getName(), node.getIpAddress());
-
-            if ("online".equals(mc.getStatus())) {
-                sshService.execute(node, buildStopCommand(mc));
-            }
-
-            sshService.execute(node, "rm -rf " + REMOTE_SERVERS_DIR + "/" + mc.getId());
-
-            if ("docker".equals(mc.getDeployTarget())) {
-                sshService.execute(node, "docker rm -f mc-" + mc.getId());
-            }
-
-            setStatus(mc, "offline");
-            log.info("[UNDEPLOY] '{}' удалён", mc.getName());
-
+            prepareNode(node);
+            sshService.runScript(node, remoteConfig.rootFor(node),
+                    remoteConfig.scriptPath(node, "cleanup.sh"), mc.getId().toString());
+            setStatus(mc.getId(), "offline");
+            log.info("[UNDEPLOY] Успешный cleanup MC-сервера {}", mc.getId());
+            return CompletableFuture.completedFuture(null);
         } catch (Exception e) {
-            log.error("[UNDEPLOY] Ошибка: {}", e.getMessage(), e);
-        }
-
-        return CompletableFuture.completedFuture(null);
-    }
-
-    // ===== ПОДГОТОВКА НОДЫ =====
-
-    private void prepareNode(Server node, MinecraftServer mc) throws IOException {
-        log.info("[DEPLOY] Подготовка ноды...");
-
-        // Создаём все нужные директории в домашней папке пользователя
-        sshService.execute(node, "mkdir -p " + REMOTE_SCRIPTS_DIR);
-        sshService.execute(node, "mkdir -p " + REMOTE_SERVERS_DIR);
-        sshService.execute(node, "mkdir -p " + REMOTE_BACKUPS_DIR);
-
-        uploadScript(node, "install_java.sh");
-        uploadScript(node, "setup_server.sh");
-        uploadScript(node, "backup.sh");
-        uploadScript(node, "cleanup_backups.sh");
-
-        if ("docker".equals(mc.getDeployTarget())) {
-            uploadScript(node, "install_docker.sh");
-            runScript(node, "install_docker.sh");
-        } else {
-            uploadScript(node, "install_screen.sh");
-            runScript(node, "install_java.sh");
-            runScript(node, "install_screen.sh");
+            setStatus(mc.getId(), "error");
+            log.error("[UNDEPLOY] Ошибка undeploy {}: {}", mc.getId(), e.getMessage(), e);
+            throw new RuntimeException("Ошибка undeploy: " + e.getMessage(), e);
         }
     }
 
-    // ===== НАСТРОЙКА СЕРВЕРА =====
+    private void prepareNode(Server node) throws IOException {
+        String root    = remoteConfig.rootFor(node);
+        String scripts = remoteConfig.scriptsDir(node);
+        String servers = remoteConfig.serversDir(node);
+        String bundles = remoteConfig.bundlesDir(node);
 
-    private void setupServer(Server node, MinecraftServer mc) {
-        log.info("[DEPLOY] Скачивание server.jar ({}:{})...",
-                mc.getModLoader(), mc.getMinecraftVersion());
-
-        String cmd = String.format(
-                "%s/setup_server.sh %s %s %s %s",
-                REMOTE_SCRIPTS_DIR,
-                mc.getId(),
-                mc.getMinecraftVersion(),
-                mc.getModLoader() != null ? mc.getModLoader() : "vanilla",
-                mc.getModLoaderVersion() != null ? mc.getModLoaderVersion() : ""
+        sshService.execute(node,
+                "mkdir -p " + sshService.quote(root) +
+                        " " + sshService.quote(scripts) +
+                        " " + sshService.quote(servers) +
+                        " " + sshService.quote(bundles) +
+                        " && chmod 755 " + sshService.quote(root) +
+                        " " + sshService.quote(scripts)
         );
 
-        String output = sshService.execute(node, cmd);
-        log.info("[DEPLOY] setup_server.sh: {}", output);
-    }
-
-    // ===== ПРИМЕНЕНИЕ КОНФИГУРАЦИИ =====
-
-    private void applyConfig(Server node, MinecraftServer mc) {
-        String serverDir = REMOTE_SERVERS_DIR + "/" + mc.getId();
-        String propsPath = serverDir + "/server.properties";
-
-        StringBuilder props = new StringBuilder();
-        props.append("server-port=").append(mc.getGamePort()).append("\n");
-        props.append("max-players=20\n");
-        props.append("online-mode=true\n");
-        props.append("motd=Powered by MC-COM\n");
-        props.append("view-distance=10\n");
-        props.append("spawn-protection=16\n");
-
-        if (Boolean.TRUE.equals(mc.getRconEnabled())) {
-            props.append("enable-rcon=true\n");
-            props.append("rcon.port=").append(mc.getRconPort()).append("\n");
-            props.append("rcon.password=").append(mc.getRconPassword()).append("\n");
+        for (String scriptName : SCRIPT_NAMES) {
+            uploadScript(node, scriptName);
         }
 
-        if (Boolean.TRUE.equals(mc.getWhitelistEnabled())) {
-            props.append("white-list=true\n");
-            props.append("enforce-whitelist=true\n");
-        }
-
-        String cmd = String.format(
-                "cat > %s << 'EOF'\n%sEOF",
-                propsPath,
-                props
+        sshService.execute(node,
+                "find " + sshService.quote(scripts) +
+                        " -maxdepth 1 -type f -name '*.sh' -exec chmod 755 {} \\;"
         );
-        sshService.execute(node, cmd);
-        log.info("[DEPLOY] server.properties применён");
     }
 
-    // ===== ЗАГРУЗКА СКРИПТА НА НОДУ =====
+    private void uploadBundle(Server node, MinecraftServer mc) throws IOException {
+        String loader = nvl(mc.getModLoader(), "vanilla").trim().toLowerCase();
+        if ("vanilla".equals(loader)) {
+            return;
+        }
+
+        String resourcePath = resolveBundleResourcePath(loader, mc.getMinecraftVersion(),
+                nvl(mc.getModLoaderVersion(), "latest"));
+        Resource resource = new ClassPathResource(resourcePath);
+        if (!resource.exists()) {
+            throw new IOException("Bundle не найден в resources: " + resourcePath);
+        }
+
+        String remotePath = resolveRemoteBundlePath(node, loader, mc.getMinecraftVersion(),
+                nvl(mc.getModLoaderVersion(), "latest"));
+        sshService.execute(node, "mkdir -p " + sshService.quote(remoteDir(remotePath)));
+
+        Path tmpFile = Files.createTempFile("mc-bundle-", "-" + remoteFileName(remotePath));
+        try (InputStream in = resource.getInputStream()) {
+            Files.write(tmpFile, in.readAllBytes());
+            sshService.uploadFile(node, tmpFile.toString(), remotePath);
+            log.info("[DEPLOY] Bundle загружен на ноду: {}", remotePath);
+        } finally {
+            Files.deleteIfExists(tmpFile);
+        }
+    }
+
+    private String resolveBundleResourcePath(String loader, String mc, String lv) {
+        return switch (loader) {
+            case "forge"    -> "server-dist/bundles/forge/forge-" + mc + "-" + lv + ".tar.gz";
+            case "paper"    -> "server-dist/bundles/paper/paper-" + mc + ".tar.gz";
+            case "fabric"   -> "server-dist/bundles/fabric/fabric-" + mc + ".tar.gz";
+            case "neoforge" -> "server-dist/bundles/neoforge/neoforge-" + lv + ".tar.gz";
+            default -> throw new IllegalArgumentException("Неподдерживаемый loader для bundle: " + loader);
+        };
+    }
+
+    private String resolveRemoteBundlePath(Server node, String loader, String mc, String lv) {
+        String bd = remoteConfig.bundlesDir(node);
+        return switch (loader) {
+            case "forge"    -> bd + "/forge/forge-" + mc + "-" + lv + ".tar.gz";
+            case "paper"    -> bd + "/paper/paper-" + mc + ".tar.gz";
+            case "fabric"   -> bd + "/fabric/fabric-" + mc + ".tar.gz";
+            case "neoforge" -> bd + "/neoforge/neoforge-" + lv + ".tar.gz";
+            default -> throw new IllegalArgumentException("Неподдерживаемый loader для bundle: " + loader);
+        };
+    }
 
     private void uploadScript(Server node, String scriptName) throws IOException {
         ClassPathResource resource = new ClassPathResource("scripts/" + scriptName);
-        Path tmpFile = Files.createTempFile("mc-script-", ".sh");
-        Files.write(tmpFile, resource.getInputStream().readAllBytes());
-
-        sshService.execute(node, "mkdir -p " + REMOTE_SCRIPTS_DIR);
-
-        String remotePath = REMOTE_SCRIPTS_DIR + "/" + scriptName;
-        sshService.uploadFile(node, tmpFile.toString(), remotePath);
-        sshService.execute(node, "chmod +x " + remotePath);
-
-        Files.deleteIfExists(tmpFile);
-        log.debug("[DEPLOY] Скрипт загружен: {}", scriptName);
-    }
-
-    // ===== ЗАПУСК СКРИПТА НА НОДЕ =====
-
-    private void runScript(Server node, String scriptName) {
-        String cmd = REMOTE_SCRIPTS_DIR + "/" + scriptName;
-        log.info("[DEPLOY] Запуск скрипта: {}", scriptName);
-        String output = sshService.execute(node, cmd);
-        log.info("[DEPLOY] {}: {}", scriptName, output);
-    }
-
-    // ===== КОМАНДЫ START / STOP =====
-
-    private String buildStartCommand(MinecraftServer mc) {
-        String serverDir = REMOTE_SERVERS_DIR + "/" + mc.getId();
-
-        if ("docker".equals(mc.getDeployTarget())) {
-            return String.format(
-                    "docker start mc-%s 2>/dev/null || docker run -d --name mc-%s " +
-                            "--restart=unless-stopped " +
-                            "-p %d:%d -m %dm --cpus=%s " +
-                            "-v %s:/data eclipse-temurin:21 " +
-                            "java -Xmx%dM -Xms512M -jar /data/server.jar nogui",
-                    mc.getId(), mc.getId(),
-                    mc.getGamePort(), mc.getGamePort(),
-                    mc.getRamMb(), mc.getCpuCores(),
-                    serverDir,
-                    mc.getRamMb()
-            );
+        if (!resource.exists()) {
+            throw new IOException("Скрипт не найден в resources/scripts: " + scriptName);
         }
 
-        return String.format(
-                "cd %s && screen -dmS mc-%s java -Xmx%dM -Xms512M -jar server.jar nogui",
-                serverDir, mc.getId(), mc.getRamMb()
-        );
-    }
-
-    private String buildStopCommand(MinecraftServer mc) {
-        if ("docker".equals(mc.getDeployTarget())) {
-            return "docker stop mc-" + mc.getId();
+        Path tmpFile = Files.createTempFile("mc-script-", "-" + scriptName);
+        try (InputStream in = resource.getInputStream()) {
+            Files.write(tmpFile, in.readAllBytes());
+            String remotePath = remoteConfig.scriptPath(node, scriptName);
+            sshService.uploadFile(node, tmpFile.toString(), remotePath);
+            sshService.execute(node, "chmod 755 " + sshService.quote(remotePath));
+        } finally {
+            Files.deleteIfExists(tmpFile);
         }
-        return "screen -S mc-" + mc.getId() + " -X stuff 'stop\n' && sleep 5";
     }
 
-    // ===== УТИЛИТЫ =====
+    private void assertDeploySucceeded(Server node, UUID mcServerId) {
+        String stateFile  = remoteConfig.runtimeDir(node, mcServerId) + "/state.env";
+        String deployLog  = remoteConfig.serverDir(node, mcServerId)  + "/logs/deploy.log";
+        String deployLock = remoteConfig.runtimeDir(node, mcServerId) + "/deploy.lock";
 
-    private void setStatus(MinecraftServer mc, String status) {
-        mc.setStatus(status);
-        mcServerRepository.save(mc);
+        String command =
+                "if [ -f " + sshService.quote(stateFile) + " ]; then " +
+                        "echo OK; " +
+                        "elif [ -f " + sshService.quote(deployLock) + " ]; then " +
+                        "echo DEPLOY_IN_PROGRESS; " +
+                        "if [ -f " + sshService.quote(deployLog) + " ]; then tail -n 120 " + sshService.quote(deployLog) + "; else echo 'deploy.log not found'; fi; " +
+                        "exit 12; " +
+                        "else " +
+                        "echo DEPLOY_NOT_COMPLETED; " +
+                        "if [ -f " + sshService.quote(deployLog) + " ]; then tail -n 120 " + sshService.quote(deployLog) + "; else echo 'deploy.log not found'; fi; " +
+                        "exit 11; " +
+                        "fi";
+
+        sshService.execute(node, command);
+    }
+
+    private void setStatus(UUID mcServerId, String status) {
+        MinecraftServer entity = findOrThrow(mcServerId);
+        entity.setStatus(status);
+        mcServerRepository.save(entity);
     }
 
     private MinecraftServer findOrThrow(UUID id) {
         return mcServerRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("MC-сервер не найден: " + id));
+    }
+
+    private static String nvl(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static Boolean nvl(Boolean value, Boolean fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private static String remoteDir(String path) {
+        int idx = path.lastIndexOf('/');
+        return idx > 0 ? path.substring(0, idx) : ".";
+    }
+
+    private static String remoteFileName(String path) {
+        int idx = path.lastIndexOf('/');
+        return idx >= 0 ? path.substring(idx + 1) : path;
     }
 }

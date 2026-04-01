@@ -17,4 +17,5 @@ public class ServerResponse {
     private Boolean isActive;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private String myRole;
 }

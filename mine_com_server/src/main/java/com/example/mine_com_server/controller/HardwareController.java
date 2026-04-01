@@ -20,7 +20,6 @@ public class HardwareController {
     private final HardwareService hardwareService;
     private final NodeAccessService nodeAccessService;
 
-    // POST /api/nodes/{nodeId}/scan-hardware — сканировать железо (ADMIN+)
     @PostMapping("/{nodeId}/scan-hardware")
     public ResponseEntity<NodeHardwareResponse> scan(
             @PathVariable UUID nodeId,
@@ -31,7 +30,6 @@ public class HardwareController {
         return ResponseEntity.ok(NodeHardwareResponse.from(hardwareService.scanAndSave(nodeId)));
     }
 
-    // GET /api/nodes/{nodeId}/hardware — получить железо (VIEWER+)
     @GetMapping("/{nodeId}/hardware")
     public ResponseEntity<NodeHardwareResponse> get(
             @PathVariable UUID nodeId,

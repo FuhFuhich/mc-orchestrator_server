@@ -1,6 +1,7 @@
 package com.example.mine_com_server.dto.response;
 
 import lombok.Data;
+
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -24,7 +25,15 @@ public class MinecraftServerResponse {
     private Boolean autoRestart;
     private Boolean backupEnabled;
     private Integer backupIntervalHours;
+    private Boolean backupAutoDelete;
+    private Integer backupDeleteAfterHours;
     private Boolean whitelistEnabled;
     private Boolean rconEnabled;
     private Integer rconPort;
+    private String remoteRoot;
+
+    private String storageType;
+    private String dockerContainerId;
+    private Integer logMaxFiles;
+    private Integer backupMaxCount;
 }

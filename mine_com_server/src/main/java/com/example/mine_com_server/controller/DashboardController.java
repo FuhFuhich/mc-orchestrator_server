@@ -19,7 +19,6 @@ public class DashboardController {
 
     private final DashboardService dashboardService;
 
-    // GET /api/dashboard
     @GetMapping
     public ResponseEntity<DashboardResponse> getDashboard(
             @AuthenticationPrincipal UserDetails userDetails

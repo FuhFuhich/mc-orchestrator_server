@@ -41,4 +41,9 @@ public class UserController {
         authService.changePassword(userId, request);
         return ResponseEntity.noContent().build();
     }
+
+    @GetMapping("/find")
+    public ResponseEntity<UserResponse> findByUsername(@RequestParam String username) {
+        return ResponseEntity.ok(authService.findByUsername(username));
+    }
 }

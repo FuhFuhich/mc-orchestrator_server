@@ -9,7 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -40,12 +39,19 @@ public class WatchdogService {
 
     private void checkServer(MinecraftServer mc) {
         Server node = mc.getNode();
+        boolean alive;
 
-        String screenName = "mc-" + mc.getId();
-        String result = sshService.execute(node,
-                "screen -ls | grep " + screenName + " | wc -l");
-
-        boolean alive = parseInt(result) > 0;
+        try {
+            if (mc.isDockerMode()) {
+                alive = checkDockerContainer(mc, node);
+            } else {
+                alive = checkScreenSession(mc, node);
+            }
+        } catch (Exception e) {
+            log.warn("[WATCHDOG] SSH недоступен для ноды {}, пропускаем проверку: {}",
+                    node.getIpAddress(), e.getMessage());
+            return;
+        }
 
         if (alive) return;
 
@@ -70,6 +76,21 @@ public class WatchdogService {
             mc.setStatus("crashed");
             mcServerRepository.save(mc);
         }
+    }
+
+    private boolean checkScreenSession(MinecraftServer mc, Server node) {
+        String screenName = "mc-" + mc.getId();
+        String result = sshService.execute(node,
+                "screen -ls 2>/dev/null | grep " + sshService.quote(screenName) + " | wc -l");
+        return parseInt(result) > 0;
+    }
+
+    private boolean checkDockerContainer(MinecraftServer mc, Server node) {
+        String containerName = DockerDeployService.dockerContainerName(mc.getId());
+        String result = sshService.execute(node,
+                "docker inspect --format='{{.State.Running}}' " +
+                        sshService.quote(containerName) + " 2>/dev/null || echo false");
+        return "true".equalsIgnoreCase(result.trim());
     }
 
     private int parseInt(String raw) {

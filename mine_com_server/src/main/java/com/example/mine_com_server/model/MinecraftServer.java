@@ -98,6 +98,23 @@ public class MinecraftServer {
     @Column(name = "rcon_password", columnDefinition = "TEXT")
     private String rconPassword;
 
+    @Column(name = "storage_type", length = 10)
+    private String storageType;
+
+    @Column(name = "docker_container_id", length = 100)
+    private String dockerContainerId;
+
+    @Builder.Default
+    @Column(name = "log_max_files")
+    private Integer logMaxFiles = 10;
+
+    @Column(name = "backup_path", columnDefinition = "TEXT")
+    private String backupPath;
+
+    @Builder.Default
+    @Column(name = "backup_max_count")
+    private Integer backupMaxCount = 10;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
@@ -107,5 +124,13 @@ public class MinecraftServer {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    public boolean isDockerMode() {
+        return "docker".equalsIgnoreCase(deployTarget);
+    }
+
+    public boolean isScreenMode() {
+        return deployTarget == null || "screen".equalsIgnoreCase(deployTarget);
     }
 }

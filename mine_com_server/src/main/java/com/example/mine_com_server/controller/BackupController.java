@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/api/backups")
@@ -40,21 +39,29 @@ public class BackupController {
     }
 
     @PostMapping("/{mcServerId}")
-    public CompletableFuture<ResponseEntity<BackupResponse>> create(
+    public ResponseEntity<Map<String, String>> create(
             @PathVariable UUID mcServerId,
             @AuthenticationPrincipal UserDetails userDetails,
             HttpServletRequest httpRequest
     ) {
         UUID userId = UUID.fromString(userDetails.getUsername());
         nodeAccessService.requireRole(userId, mcServerService.getNodeId(mcServerId), NodeRole.ADMIN);
-        auditService.record(userId, AuditActions.CREATE_BACKUP, "MC_SERVER",
-                mcServerId, null, httpRequest.getRemoteAddr());
-        return backupService.createBackup(mcServerId)
-                .thenApply(ResponseEntity::ok);
+
+        auditService.record(
+                userId,
+                AuditActions.CREATE_BACKUP,
+                "MC_SERVER",
+                mcServerId,
+                null,
+                httpRequest.getRemoteAddr()
+        );
+
+        backupService.createBackup(mcServerId); // async
+        return ResponseEntity.ok(Map.of("status", "backup_started"));
     }
 
     @PostMapping("/{backupId}/restore")
-    public CompletableFuture<ResponseEntity<Map<String, String>>> restore(
+    public ResponseEntity<Map<String, String>> restore(
             @PathVariable UUID backupId,
             @AuthenticationPrincipal UserDetails userDetails,
             HttpServletRequest httpRequest
@@ -62,10 +69,18 @@ public class BackupController {
         UUID userId = UUID.fromString(userDetails.getUsername());
         UUID nodeId = backupService.getNodeIdByBackupId(backupId);
         nodeAccessService.requireRole(userId, nodeId, NodeRole.OWNER);
-        auditService.record(userId, AuditActions.RESTORE_BACKUP, "BACKUP",
-                backupId, null, httpRequest.getRemoteAddr());
-        return backupService.restore(backupId)
-                .thenApply(v -> ResponseEntity.ok(Map.of("status", "restoring")));
+
+        auditService.record(
+                userId,
+                AuditActions.RESTORE_BACKUP,
+                "BACKUP",
+                backupId,
+                null,
+                httpRequest.getRemoteAddr()
+        );
+
+        backupService.restore(backupId); // sync
+        return ResponseEntity.ok(Map.of("status", "restored"));
     }
 
     @DeleteMapping("/{backupId}")
@@ -77,8 +92,16 @@ public class BackupController {
         UUID userId = UUID.fromString(userDetails.getUsername());
         UUID nodeId = backupService.getNodeIdByBackupId(backupId);
         nodeAccessService.requireRole(userId, nodeId, NodeRole.ADMIN);
-        auditService.record(userId, AuditActions.DELETE_BACKUP, "BACKUP",
-                backupId, null, httpRequest.getRemoteAddr());
+
+        auditService.record(
+                userId,
+                AuditActions.DELETE_BACKUP,
+                "BACKUP",
+                backupId,
+                null,
+                httpRequest.getRemoteAddr()
+        );
+
         backupService.delete(backupId);
         return ResponseEntity.noContent().build();
     }

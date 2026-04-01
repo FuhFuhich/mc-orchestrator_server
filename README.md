@@ -1,0 +1,1 @@
+mine_com_server/src/main/resources/server-dist/bundles/

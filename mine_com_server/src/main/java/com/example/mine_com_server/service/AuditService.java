@@ -21,8 +21,6 @@ public class AuditService {
 
     private final AuditLogRepository auditLogRepository;
 
-    // ===== ЗАПИСАТЬ ДЕЙСТВИЕ =====
-
     @Async("mc-async-")
     @Transactional
     public void record(UUID userId, String action,
@@ -47,8 +45,6 @@ public class AuditService {
         record(userId, action, entityType, entityId, null, null);
     }
 
-    // ===== ПОЛУЧИТЬ ЛОГИ =====
-
     public List<AuditLog> getByUser(UUID userId, int hours) {
         LocalDateTime from = LocalDateTime.now().minusHours(hours);
         return auditLogRepository
@@ -58,8 +54,6 @@ public class AuditService {
     public List<AuditLog> getByEntity(UUID entityId) {
         return auditLogRepository.findAllByEntityIdOrderByCreatedAtDesc(entityId);
     }
-
-    // ===== ОЧИСТКА СТАРЫХ ЛОГОВ (раз в сутки, хранить 30 дней) =====
 
     @Scheduled(cron = "0 0 3 * * *") // каждый день в 3:00
     @Transactional

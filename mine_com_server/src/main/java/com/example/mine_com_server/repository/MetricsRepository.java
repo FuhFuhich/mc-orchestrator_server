@@ -24,7 +24,6 @@ public interface MetricsRepository extends JpaRepository<Metrics, UUID> {
             LocalDateTime to
     );
 
-    // Последняя запись (для дашборда)
     Optional<Metrics> findTopByMinecraftServerIdOrderByRecordedAtDesc(UUID minecraftServerId);
 
     @Query("""
@@ -38,7 +37,6 @@ public interface MetricsRepository extends JpaRepository<Metrics, UUID> {
             @Param("from") LocalDateTime from
     );
 
-    // Метрики всех серверов конкретной ноды за период
     @Query("""
         SELECT m FROM Metrics m
         WHERE m.minecraftServer.node.id = :nodeId
@@ -50,13 +48,11 @@ public interface MetricsRepository extends JpaRepository<Metrics, UUID> {
             @Param("from") LocalDateTime from
     );
 
-    // Удаление старых метрик
     @Modifying
     @Transactional
     @Query("DELETE FROM Metrics m WHERE m.recordedAt < :cutoff")
     void deleteOlderThan(@Param("cutoff") LocalDateTime cutoff);
 
-    // Количество крашей за 24ч по серверу
     @Query("""
         SELECT COALESCE(SUM(m.crashesLast24h), 0)
         FROM Metrics m

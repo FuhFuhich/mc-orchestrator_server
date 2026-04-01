@@ -1,10 +1,14 @@
 package com.example.mine_com_server.service;
 
+import com.example.mine_com_server.dto.request.ChangePasswordRequest;
 import com.example.mine_com_server.dto.request.LoginRequest;
 import com.example.mine_com_server.dto.request.RegisterRequest;
+import com.example.mine_com_server.dto.request.UpdateProfileRequest;
 import com.example.mine_com_server.dto.response.AuthResponse;
 import com.example.mine_com_server.dto.response.UserResponse;
+import com.example.mine_com_server.exception.ForbiddenException;
 import com.example.mine_com_server.exception.NotFoundException;
+import com.example.mine_com_server.model.RefreshToken;
 import com.example.mine_com_server.model.User;
 import com.example.mine_com_server.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -14,8 +18,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.example.mine_com_server.dto.request.UpdateProfileRequest;
-import com.example.mine_com_server.dto.request.ChangePasswordRequest;
 
 import java.util.UUID;
 
@@ -33,16 +35,20 @@ public class AuthService {
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
-        if (request.getEmail() != null && !request.getEmail().isBlank()
+        if (request.getEmail() != null
+                && !request.getEmail().isBlank()
                 && userRepository.existsByEmail(request.getEmail())) {
-            throw new IllegalStateException("Email уже занят: " + request.getEmail());
+            throw new IllegalStateException("Email " + request.getEmail());
         }
-        if (request.getPhoneNumber() != null && !request.getPhoneNumber().isBlank()
+
+        if (request.getPhoneNumber() != null
+                && !request.getPhoneNumber().isBlank()
                 && userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
-            throw new IllegalStateException("Телефон уже занят: " + request.getPhoneNumber());
+            throw new IllegalStateException(request.getPhoneNumber());
         }
+
         if (userRepository.existsByUsername(request.getUsername())) {
-            throw new IllegalStateException("Имя пользователя занято: " + request.getUsername());
+            throw new IllegalStateException(request.getUsername());
         }
 
         User user = User.builder()
@@ -55,7 +61,8 @@ public class AuthService {
                 .build();
 
         user = userRepository.save(user);
-        log.info("[AUTH] Зарегистрирован: {}", user.getUsername());
+        log.info("AUTH {}", user.getUsername());
+
         return buildAuthResponse(user);
     }
 
@@ -63,11 +70,10 @@ public class AuthService {
     public AuthResponse login(LoginRequest request) {
         String identity = request.getIdentity();
 
-        // Ищем пользователя по email, username или телефону
         User user = userRepository.findByEmail(identity)
                 .or(() -> userRepository.findByUsername(identity))
                 .or(() -> userRepository.findByPhoneNumber(identity))
-                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+                .orElseThrow(() -> new NotFoundException("User not found: " + identity));
 
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
@@ -76,64 +82,69 @@ public class AuthService {
                 )
         );
 
-        log.info("[AUTH] Вход: {}", user.getEmail());
+        log.info("AUTH {}", user.getEmail());
         return buildAuthResponse(user);
     }
 
     @Transactional
     public AuthResponse refresh(String refreshTokenValue) {
-        UUID userId = refreshTokenService.validate(refreshTokenValue);
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+        RefreshToken refreshToken = refreshTokenService.findByRawToken(refreshTokenValue)
+                .orElseThrow(() -> new ForbiddenException("Невалидный refresh token"));
+
+        User user = refreshToken.getUser();
+        if (user == null) {
+            throw new NotFoundException("User not found for refresh token");
+        }
+
+        refreshTokenService.deleteByUserId(user.getId());
         return buildAuthResponse(user);
     }
 
     @Transactional
     public void logout(UUID userId) {
-        refreshTokenService.revokeByUserId(userId);
-        log.info("[AUTH] Выход: {}", userId);
+        refreshTokenService.deleteByUserId(userId);
+        log.info("AUTH logout {}", userId);
     }
 
     public UserResponse getMe(UUID userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+                .orElseThrow(() -> new NotFoundException("User not found: " + userId));
         return toUserResponse(user);
-    }
-
-    private AuthResponse buildAuthResponse(User user) {
-        String accessToken  = jwtService.generateToken(user.getId());
-        String refreshToken = refreshTokenService.create(user.getId());
-        return new AuthResponse(accessToken, refreshToken, user.getUsername(), user.getEmail(), user.getRole());
     }
 
     @Transactional
     public UserResponse updateMe(UUID userId, UpdateProfileRequest request) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+                .orElseThrow(() -> new NotFoundException("User not found: " + userId));
 
         if (request.getUsername() != null && !request.getUsername().equals(user.getUsername())) {
-            if (userRepository.existsByUsername(request.getUsername()))
-                throw new IllegalStateException("Имя пользователя занято");
+            if (userRepository.existsByUsername(request.getUsername())) {
+                throw new IllegalStateException();
+            }
             user.setUsername(request.getUsername());
         }
+
         if (request.getEmail() != null && !request.getEmail().equals(user.getEmail())) {
-            if (userRepository.existsByEmail(request.getEmail()))
-                throw new IllegalStateException("Email уже занят");
+            if (userRepository.existsByEmail(request.getEmail())) {
+                throw new IllegalStateException("Email");
+            }
             user.setEmail(request.getEmail());
         }
+
         if (request.getPhoneNumber() != null) {
             user.setPhoneNumber(request.getPhoneNumber());
         }
 
         user = userRepository.save(user);
-        log.info("[USER] Профиль обновлён: {}", user.getUsername());
+        log.info("USER updated {}", user.getUsername());
+
         return toUserResponse(user);
     }
 
     @Transactional
     public void changePassword(UUID userId, ChangePasswordRequest request) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+                .orElseThrow(() -> new NotFoundException("User not found: " + userId));
 
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
@@ -144,19 +155,39 @@ public class AuthService {
 
         user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
-        log.info("[USER] Пароль изменён: {}", user.getUsername());
+
+        log.info("USER password changed {}", user.getUsername());
+    }
+
+    public UserResponse findByUsername(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new NotFoundException("User not found: " + username));
+        return toUserResponse(user);
+    }
+
+    private AuthResponse buildAuthResponse(User user) {
+        String accessToken = jwtService.generateToken(user.getId());
+        String refreshToken = refreshTokenService.create(user);
+
+        return new AuthResponse(
+                accessToken,
+                refreshToken,
+                user.getUsername(),
+                user.getEmail(),
+                user.getRole()
+        );
     }
 
     private UserResponse toUserResponse(User user) {
-        UserResponse r = new UserResponse();
-        r.setId(user.getId());
-        r.setUsername(user.getUsername());
-        r.setEmail(user.getEmail());
-        r.setPhoneNumber(user.getPhoneNumber());
-        r.setRole(user.getRole());
-        r.setIsActive(user.getIsActive());
-        r.setCreatedAt(user.getCreatedAt());
-        r.setAvatarUrl(user.getAvatarUrl());
-        return r;
+        UserResponse response = new UserResponse();
+        response.setId(user.getId());
+        response.setUsername(user.getUsername());
+        response.setEmail(user.getEmail());
+        response.setPhoneNumber(user.getPhoneNumber());
+        response.setRole(user.getRole());
+        response.setIsActive(user.getIsActive());
+        response.setCreatedAt(user.getCreatedAt());
+        response.setAvatarUrl(user.getAvatarUrl());
+        return response;
     }
 }

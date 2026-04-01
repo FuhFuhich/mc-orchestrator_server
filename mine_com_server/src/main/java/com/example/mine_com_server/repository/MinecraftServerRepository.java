@@ -13,29 +13,22 @@ import java.util.UUID;
 public interface MinecraftServerRepository extends JpaRepository<MinecraftServer, UUID> {
 
     List<MinecraftServer> findAllByNodeId(UUID nodeId);
-
     List<MinecraftServer> findAllByStatus(String status);
 
-    // Все серверы пользователя через ноды
     @Query("""
         SELECT ms FROM MinecraftServer ms
         WHERE ms.node.id IN (
-            SELECT us.server.id FROM UserServer us WHERE us.user.id = :userId
+            SELECT nm.node.id FROM NodeMember nm WHERE nm.user.id = :userId
         )
     """)
     List<MinecraftServer> findAllByUserId(@Param("userId") UUID userId);
 
-    // Количество онлайн-серверов на ноде
     long countByNodeIdAndStatus(UUID nodeId, String status);
-
     boolean existsByNameAndNodeId(String name, UUID nodeId);
+    boolean existsByNodeIdAndGamePort(UUID nodeId, Integer gamePort);
 
-    // Для авто-бэкапа
     List<MinecraftServer> findAllByBackupEnabledTrue();
-
-    // Для авто-очистки бэкапов
     List<MinecraftServer> findAllByBackupAutoDeleteTrue();
-
     List<MinecraftServer> findAllByNodeIdIn(List<UUID> nodeIds);
     int countByNodeIdInAndStatus(List<UUID> nodeIds, String status);
 }

@@ -26,7 +26,6 @@ public class DashboardService {
 
     public DashboardResponse getDashboard(UUID userId) {
 
-        // Ноды пользователя
         List<UUID> nodeIds = nodeMemberRepository.findAllByUserId(userId)
                 .stream()
                 .map(nm -> nm.getNode().getId())
@@ -39,7 +38,6 @@ public class DashboardService {
                 .filter(n -> Boolean.TRUE.equals(n.getIsActive()))
                 .count();
 
-        // MC-серверы
         List<UUID> mcIds = mcServerRepository.findAllByNodeIdIn(nodeIds)
                 .stream()
                 .map(mc -> mc.getId())
@@ -48,10 +46,8 @@ public class DashboardService {
         int totalMcServers  = mcIds.size();
         int onlineMcServers = mcServerRepository.countByNodeIdInAndStatus(nodeIds, "online");
 
-        // Бэкапы
         long totalBackups = backupRepository.countByMinecraftServerIdIn(mcIds);
 
-        // Метрики - берём последние для каждого онлайн-сервера
         List<Metrics> latestMetrics = mcIds.stream()
                 .map(metricsRepository::findTopByMinecraftServerIdOrderByRecordedAtDesc)
                 .filter(Optional::isPresent)

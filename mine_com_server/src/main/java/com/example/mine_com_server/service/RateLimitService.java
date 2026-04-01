@@ -16,9 +16,6 @@ public class RateLimitService {
 
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
 
-    // ===== ЛИМИТЫ =====
-
-    // Логин - 5 попыток в минуту с одного IP
     public void checkLogin(String ip) {
         consume(
                 "login:" + ip,
@@ -30,7 +27,6 @@ public class RateLimitService {
         );
     }
 
-    // Регистрация - 3 попытки в минуту с одного IP
     public void checkRegister(String ip) {
         consume(
                 "register:" + ip,
@@ -42,7 +38,6 @@ public class RateLimitService {
         );
     }
 
-    // Общий лимит - 100 запросов в минуту на юзера
     public void checkApi(String userId) {
         consume(
                 "api:" + userId,
@@ -53,8 +48,6 @@ public class RateLimitService {
                 "Слишком много запросов. Подождите минуту."
         );
     }
-
-    // ===== ВНУТРЕННЯЯ ЛОГИКА =====
 
     private void consume(String key, Bandwidth bandwidth, String errorMessage) {
         Bucket bucket = buckets.computeIfAbsent(key,

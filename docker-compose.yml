@@ -1,0 +1,64 @@
+
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       mc_orchestrator
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-postgres_change_me}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mc_orchestrator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ./mine_com_server
+      dockerfile: Dockerfile
+    container_name: mc-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+
+      DB_URL:      "jdbc:postgresql://postgres:5432/mc_orchestrator"
+      DB_USER:     postgres
+      DB_PASSWORD: "${DB_PASSWORD:-postgres_change_me}"
+
+      APP_JWT_SECRET:           "${APP_JWT_SECRET:-change_me_in_production_min_32_chars}"
+      APP_JWT_EXPIRATION_MS:    "${APP_JWT_EXPIRATION_MS:-86400000}"
+      APP_REFRESH_TOKEN_EXPIRATION_DAYS: "${APP_REFRESH_TOKEN_DAYS:-30}"
+
+      APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY:-zlpYkmFbqynDO6g5G0879oLxEejBcKRQ}"
+
+      JPA_DDL_AUTO: "${JPA_DDL_AUTO:-update}"
+
+      APP_CORS_ALLOWED_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+
+      JAVA_OPTS: "-XX:+UseG1GC -XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - app_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres_data:
+  app_uploads:
