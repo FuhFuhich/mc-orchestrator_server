@@ -2,6 +2,7 @@ package com.example.mine_com_server.service;
 
 import com.example.mine_com_server.dto.response.DashboardResponse;
 import com.example.mine_com_server.model.Metrics;
+import com.example.mine_com_server.model.NodeMember;
 import com.example.mine_com_server.repository.BackupRepository;
 import com.example.mine_com_server.repository.MetricsRepository;
 import com.example.mine_com_server.repository.MinecraftServerRepository;
@@ -9,6 +10,7 @@ import com.example.mine_com_server.repository.NodeMemberRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,18 +26,19 @@ public class DashboardService {
     private final BackupRepository backupRepository;
     private final MetricsRepository metricsRepository;
 
+    @Transactional(readOnly = true)
     public DashboardResponse getDashboard(UUID userId) {
+        List<NodeMember> memberships = nodeMemberRepository.findAllByUserId(userId);
 
-        List<UUID> nodeIds = nodeMemberRepository.findAllByUserId(userId)
-                .stream()
+        List<UUID> nodeIds = memberships.stream()
                 .map(nm -> nm.getNode().getId())
                 .toList();
 
-        int totalNodes  = nodeIds.size();
-        int onlineNodes = (int) nodeMemberRepository.findAllByUserId(userId)
-                .stream()
-                .map(nm -> nm.getNode())
-                .filter(n -> Boolean.TRUE.equals(n.getIsActive()))
+        int totalNodes = nodeIds.size();
+
+        int onlineNodes = (int) memberships.stream()
+                .map(NodeMember::getNode)
+                .filter(node -> Boolean.TRUE.equals(node.getIsActive()))
                 .count();
 
         List<UUID> mcIds = mcServerRepository.findAllByNodeIdIn(nodeIds)
@@ -43,10 +46,12 @@ public class DashboardService {
                 .map(mc -> mc.getId())
                 .toList();
 
-        int totalMcServers  = mcIds.size();
+        int totalMcServers = mcIds.size();
         int onlineMcServers = mcServerRepository.countByNodeIdInAndStatus(nodeIds, "online");
 
-        long totalBackups = backupRepository.countByMinecraftServerIdIn(mcIds);
+        long totalBackups = mcIds.isEmpty()
+                ? 0L
+                : backupRepository.countByMinecraftServerIdIn(mcIds);
 
         List<Metrics> latestMetrics = mcIds.stream()
                 .map(metricsRepository::findTopByMinecraftServerIdOrderByRecordedAtDesc)
@@ -80,17 +85,18 @@ public class DashboardService {
                 .mapToInt(m -> m.getCrashesLast24h() != null ? m.getCrashesLast24h() : 0)
                 .sum();
 
-        DashboardResponse r = new DashboardResponse();
-        r.setTotalNodes(totalNodes);
-        r.setOnlineNodes(onlineNodes);
-        r.setTotalMcServers(totalMcServers);
-        r.setOnlineMcServers(onlineMcServers);
-        r.setPlayersOnline(playersOnline);
-        r.setAvgCpuPercent(Math.round(avgCpuPercent * 100.0) / 100.0);
-        r.setAvgRamPercent(Math.round(avgRamPercent * 100.0) / 100.0);
-        r.setAvgDiskPercent(Math.round(avgDiskPercent * 100.0) / 100.0);
-        r.setTotalBackups(totalBackups);
-        r.setCrashesLast24h(crashesLast24h);
-        return r;
+        DashboardResponse response = new DashboardResponse();
+        response.setTotalNodes(totalNodes);
+        response.setOnlineNodes(onlineNodes);
+        response.setTotalMcServers(totalMcServers);
+        response.setOnlineMcServers(onlineMcServers);
+        response.setPlayersOnline(playersOnline);
+        response.setAvgCpuPercent(Math.round(avgCpuPercent * 100.0) / 100.0);
+        response.setAvgRamPercent(Math.round(avgRamPercent * 100.0) / 100.0);
+        response.setAvgDiskPercent(Math.round(avgDiskPercent * 100.0) / 100.0);
+        response.setTotalBackups(totalBackups);
+        response.setCrashesLast24h(crashesLast24h);
+
+        return response;
     }
 }

@@ -18,13 +18,19 @@ import java.util.UUID;
 @Repository
 public interface MetricsRepository extends JpaRepository<Metrics, UUID> {
 
-    List<Metrics> findAllByMinecraftServerIdAndRecordedAtBetweenOrderByRecordedAtAsc(
-            UUID minecraftServerId,
+    Optional<Metrics> findTopByMinecraftServerIdOrderByRecordedAtDesc(UUID minecraftServerId);
+
+    Page<Metrics> findAllByMinecraftServerIdAndRecordedAtAfter(
+            UUID mcServerId,
             LocalDateTime from,
-            LocalDateTime to
+            Pageable pageable
     );
 
-    Optional<Metrics> findTopByMinecraftServerIdOrderByRecordedAtDesc(UUID minecraftServerId);
+    Page<Metrics> findAllByMinecraftServer_Node_IdAndRecordedAtAfter(
+            UUID nodeId,
+            LocalDateTime from,
+            Pageable pageable
+    );
 
     @Query("""
         SELECT m FROM Metrics m
@@ -37,36 +43,8 @@ public interface MetricsRepository extends JpaRepository<Metrics, UUID> {
             @Param("from") LocalDateTime from
     );
 
-    @Query("""
-        SELECT m FROM Metrics m
-        WHERE m.minecraftServer.node.id = :nodeId
-          AND m.recordedAt >= :from
-        ORDER BY m.recordedAt ASC
-    """)
-    List<Metrics> findAllByNodeIdAfter(
-            @Param("nodeId") UUID nodeId,
-            @Param("from") LocalDateTime from
-    );
-
     @Modifying
     @Transactional
     @Query("DELETE FROM Metrics m WHERE m.recordedAt < :cutoff")
     void deleteOlderThan(@Param("cutoff") LocalDateTime cutoff);
-
-    @Query("""
-        SELECT COALESCE(SUM(m.crashesLast24h), 0)
-        FROM Metrics m
-        WHERE m.minecraftServer.id = :serverId
-          AND m.recordedAt >= :from
-    """)
-    Integer sumCrashesLast24h(
-            @Param("serverId") UUID serverId,
-            @Param("from") LocalDateTime from
-    );
-
-    Page<Metrics> findAllByMinecraftServerIdAndRecordedAtAfter(
-            UUID mcServerId, LocalDateTime from, Pageable pageable);
-
-    Page<Metrics> findAllByMinecraftServer_Node_IdAndRecordedAtAfter(
-            UUID nodeId, LocalDateTime from, Pageable pageable);
 }

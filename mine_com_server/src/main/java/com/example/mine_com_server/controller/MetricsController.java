@@ -13,6 +13,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -34,11 +35,21 @@ public class MetricsController {
         return ResponseEntity.ok(metricsService.getLatest(mcServerId));
     }
 
+    @GetMapping("/{mcServerId}/runtime")
+    public ResponseEntity<MetricsResponse> getRuntime(
+            @PathVariable UUID mcServerId,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        UUID userId = UUID.fromString(userDetails.getUsername());
+        nodeAccessService.requireRole(userId, mcServerService.getNodeId(mcServerId), NodeRole.VIEWER);
+        return ResponseEntity.ok(metricsService.getRuntime(mcServerId));
+    }
+
     @GetMapping("/{mcServerId}/history")
     public ResponseEntity<Page<MetricsResponse>> getHistory(
             @PathVariable UUID mcServerId,
-            @RequestParam(defaultValue = "24")  int hours,
-            @RequestParam(defaultValue = "0")   int page,
+            @RequestParam(defaultValue = "24") int hours,
+            @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "100") int size,
             @AuthenticationPrincipal UserDetails userDetails
     ) {
@@ -47,11 +58,23 @@ public class MetricsController {
         return ResponseEntity.ok(metricsService.getHistory(mcServerId, hours, page, size));
     }
 
+    @GetMapping("/{mcServerId}/series")
+    public ResponseEntity<List<MetricsResponse>> getSeries(
+            @PathVariable UUID mcServerId,
+            @RequestParam(defaultValue = "24") int hours,
+            @RequestParam(defaultValue = "480") int points,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        UUID userId = UUID.fromString(userDetails.getUsername());
+        nodeAccessService.requireRole(userId, mcServerService.getNodeId(mcServerId), NodeRole.VIEWER);
+        return ResponseEntity.ok(metricsService.getSeries(mcServerId, hours, points));
+    }
+
     @GetMapping("/node/{nodeId}")
     public ResponseEntity<Page<MetricsResponse>> getByNode(
             @PathVariable UUID nodeId,
-            @RequestParam(defaultValue = "6")  int hours,
-            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "6") int hours,
+            @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size,
             @AuthenticationPrincipal UserDetails userDetails
     ) {
@@ -67,7 +90,7 @@ public class MetricsController {
     ) {
         UUID userId = UUID.fromString(userDetails.getUsername());
         nodeAccessService.requireRole(userId, mcServerService.getNodeId(mcServerId), NodeRole.ADMIN);
-        MinecraftServer mc = mcServerService.findOrThrow(mcServerId); // нужен публичный метод
+        MinecraftServer mc = mcServerService.findOrThrow(mcServerId);
         return ResponseEntity.ok(metricsService.collectForServer(mc));
     }
 }

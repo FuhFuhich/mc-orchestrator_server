@@ -1,6 +1,7 @@
 package com.example.mine_com_server.controller;
 
 import com.example.mine_com_server.dto.response.NodeHardwareResponse;
+import com.example.mine_com_server.dto.response.NodeUsageResponse;
 import com.example.mine_com_server.model.NodeRole;
 import com.example.mine_com_server.service.HardwareService;
 import com.example.mine_com_server.service.NodeAccessService;
@@ -28,6 +29,17 @@ public class HardwareController {
         UUID userId = UUID.fromString(userDetails.getUsername());
         nodeAccessService.requireRole(userId, nodeId, NodeRole.ADMIN);
         return ResponseEntity.ok(NodeHardwareResponse.from(hardwareService.scanAndSave(nodeId)));
+    }
+
+
+    @GetMapping("/{nodeId}/usage")
+    public ResponseEntity<NodeUsageResponse> getUsage(
+            @PathVariable UUID nodeId,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        UUID userId = UUID.fromString(userDetails.getUsername());
+        nodeAccessService.requireRole(userId, nodeId, NodeRole.VIEWER);
+        return ResponseEntity.ok(hardwareService.getLiveUsage(nodeId));
     }
 
     @GetMapping("/{nodeId}/hardware")
