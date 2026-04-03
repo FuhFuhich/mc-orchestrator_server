@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 @Controller
 @RequiredArgsConstructor
@@ -30,14 +29,14 @@ public class ConsoleController {
 
     @PostMapping("/api/console/{id}/start")
     @ResponseBody
-    public CompletableFuture<ResponseEntity<Map<String, String>>> startStream(
+    public ResponseEntity<Map<String, String>> startStream(
             @PathVariable UUID id,
             @AuthenticationPrincipal UserDetails userDetails
     ) {
         UUID userId = UUID.fromString(userDetails.getUsername());
         nodeAccessService.requireRole(userId, mcServerService.getNodeId(id), NodeRole.VIEWER);
-        return consoleService.startStreaming(id)
-                .thenApply(v -> ResponseEntity.ok(Map.of("status", "streaming")));
+        consoleService.startStreaming(id);
+        return ResponseEntity.ok(Map.of("status", "streaming"));
     }
 
     @PostMapping("/api/console/{id}/stop")

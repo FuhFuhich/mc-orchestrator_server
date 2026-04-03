@@ -16,13 +16,17 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Slf4j
 @Service
@@ -362,6 +366,52 @@ public class MinecraftServerService {
             return remoteFile;
         } catch (IOException e) {
             throw new IllegalStateException("Не удалось прочитать архив: " + e.getMessage(), e);
+        }
+    }
+
+
+    public byte[] buildModsArchive(UUID id) {
+        MinecraftServer mc = findOrThrow(id);
+        String serverRoot = mc.isDockerMode()
+                ? remoteConfig.dockerServerDataDir(mc.getNode(), mc.getId(), mc.getStorageType())
+                : remoteConfig.serverDir(mc.getNode(), mc.getId());
+        String modsDir = serverRoot + "/mods";
+
+        if (!sshService.exists(mc.getNode(), modsDir)) {
+            throw new NotFoundException("Папка mods не найдена");
+        }
+
+        String rawList = sshService.execute(mc.getNode(),
+                "cd " + sshService.quote(modsDir) +
+                        " && find . -type f | sort");
+
+        List<String> relativeFiles = Arrays.stream(rawList.split("\\R"))
+                .map(String::trim)
+                .filter(line -> !line.isBlank())
+                .map(line -> line.replaceFirst("^\\./", ""))
+                .toList();
+
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+             ZipOutputStream zos = new ZipOutputStream(baos)) {
+
+            if (relativeFiles.isEmpty()) {
+                zos.putNextEntry(new ZipEntry("mods/"));
+                zos.closeEntry();
+            }
+
+            for (String relativeFile : relativeFiles) {
+                String normalized = relativeFile.replace('\\', '/');
+                byte[] bytes = sshService.downloadFile(mc.getNode(), modsDir + "/" + relativeFile);
+                ZipEntry entry = new ZipEntry("mods/" + normalized);
+                zos.putNextEntry(entry);
+                zos.write(bytes);
+                zos.closeEntry();
+            }
+
+            zos.finish();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Не удалось собрать архив модов: " + e.getMessage(), e);
         }
     }
 

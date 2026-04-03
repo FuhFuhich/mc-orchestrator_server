@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
@@ -32,6 +33,7 @@ public class MinecraftServerController {
     private final AuditService auditService;
     private final BackupService backupService;
     private final RconService rconService;
+    private final JwtService jwtService;
 
     @GetMapping
     public ResponseEntity<List<MinecraftServerResponse>> getAll(
@@ -257,6 +259,25 @@ public class MinecraftServerController {
                 null, httpRequest.getRemoteAddr());
         backupService.createBackup(id);
         return ResponseEntity.ok(Map.of("status", "backup_started"));
+    }
+
+
+    @PostMapping("/{id}/mods/share-link")
+    public ResponseEntity<Map<String, String>> createModsShareLink(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        UUID userId = UUID.fromString(userDetails.getUsername());
+        nodeAccessService.requireRole(userId, mcServerService.getNodeId(id), NodeRole.VIEWER);
+
+        String token = jwtService.generateModsShareToken(id, 24L * 60L * 60L * 1000L);
+        String baseUrl = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+        String url = baseUrl + "/api/public/mc-servers/" + id + "/mods/download?token=" + token;
+
+        return ResponseEntity.ok(Map.of(
+                "url", url,
+                "expiresInHours", "24"
+        ));
     }
 
     @PostMapping(path = "/{id}/archives", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

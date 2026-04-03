@@ -32,6 +32,31 @@ public class JwtService {
                 .compact();
     }
 
+    public String generateModsShareToken(UUID mcServerId, long ttlMs) {
+        return Jwts.builder()
+                .subject("mods-share")
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + ttlMs))
+                .claim("type", "mods_share")
+                .claim("mcServerId", mcServerId.toString())
+                .signWith(getKey())
+                .compact();
+    }
+
+    public boolean isModsShareTokenValid(String token, UUID mcServerId) {
+        try {
+            Claims claims = extractClaims(token);
+            String tokenType = claims.get("type", String.class);
+            String tokenServerId = claims.get("mcServerId", String.class);
+            return "mods_share".equals(tokenType)
+                    && mcServerId.toString().equals(tokenServerId)
+                    && claims.getExpiration() != null
+                    && claims.getExpiration().after(new Date());
+        } catch (JwtException | IllegalArgumentException ex) {
+            return false;
+        }
+    }
+
     public String extractUserId(String token) {
         return extractClaims(token).getSubject();
     }

@@ -45,7 +45,7 @@ public class FileSystemService {
         return Arrays.stream(raw.split("\\R"))
                 .skip(1) // skip "total N" header
                 .filter(line -> !line.isEmpty())
-                .map(line -> parseLsLine(line, absPath))
+                .map(line -> parseLsLine(line, serverRoot, absPath))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
                 .collect(Collectors.toList());
@@ -137,7 +137,7 @@ public class FileSystemService {
         }
     }
 
-    private Optional<FileEntryResponse> parseLsLine(String line, String parentPath) {
+    private Optional<FileEntryResponse> parseLsLine(String line, String serverRoot, String parentPath) {
         try {
             String[] parts = line.trim().split("\\s+", 9);
             if (parts.length < 9) return Optional.empty();
@@ -156,7 +156,7 @@ public class FileSystemService {
 
             return Optional.of(FileEntryResponse.builder()
                     .name(name)
-                    .path(parentPath + "/" + name)
+                    .path(toRelativePath(serverRoot, parentPath, name))
                     .directory(isDir)
                     .sizeBytes(isDir ? 0 : size)
                     .permissions(perms)
@@ -165,6 +165,23 @@ public class FileSystemService {
         } catch (Exception e) {
             return Optional.empty();
         }
+    }
+
+
+    private String toRelativePath(String serverRoot, String parentPath, String name) {
+        String normalizedRoot = serverRoot == null ? "" : serverRoot;
+        String normalizedParent = parentPath == null ? normalizedRoot : parentPath;
+        String relativeParent = normalizedParent.startsWith(normalizedRoot)
+                ? normalizedParent.substring(normalizedRoot.length())
+                : normalizedParent;
+
+        String base = relativeParent == null || relativeParent.isBlank() ? "" : relativeParent.replace('\\', '/');
+        if (!base.startsWith("/") && !base.isEmpty()) {
+            base = "/" + base;
+        }
+
+        String candidate = (base + "/" + name).replaceAll("/+", "/");
+        return candidate.startsWith("/") ? candidate : "/" + candidate;
     }
 
     private long parseLong(String s) {
