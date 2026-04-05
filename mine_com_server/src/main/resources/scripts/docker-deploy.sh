@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/docker-common.sh"
 MC_ID="${1:-}"
 MC_VERSION="${2:-}"
 MOD_LOADER="${3:-paper}"
-MOD_LOADER_VERSION="${4:-latest}"
+MOD_LOADER_VERSION="${4:-}"
 GAME_PORT="${5:-25565}"
 RAM_MB="${6:-2048}"
 CPU_CORES="${7:-2}"
@@ -172,11 +172,16 @@ setup_paper() {
   log "Setting up Paper ${MC_VERSION}..."
 
   local build jar_name url
-  build="$(get_paper_latest_build "$MC_VERSION")" \
-    || fail "Could not determine latest Paper build for MC ${MC_VERSION}"
+  if [[ -n "$MOD_LOADER_VERSION" && "$MOD_LOADER_VERSION" =~ ^[0-9]+$ ]]; then
+    build="$MOD_LOADER_VERSION"
+  else
+    build="$(get_paper_latest_build "$MC_VERSION")" \
+      || fail "Could not determine stable Paper build for MC ${MC_VERSION}"
+  fi
 
   [[ "$build" =~ ^[0-9]+$ ]] || fail "Invalid Paper build returned for MC ${MC_VERSION}: $build"
 
+  MOD_LOADER_VERSION="$build"
   jar_name="paper-${MC_VERSION}-${build}.jar"
   url="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${build}/downloads/${jar_name}"
 
@@ -248,9 +253,11 @@ setup_forge() {
   local forge_version
   forge_version="$MOD_LOADER_VERSION"
 
-  [[ -n "$forge_version" && "$forge_version" != "latest" ]] \
-    || fail "Forge requires explicit MOD_LOADER_VERSION (example: 47.3.12)"
+  if [[ -z "$forge_version" || "$forge_version" == "latest" ]]; then
+    forge_version="$(get_forge_latest_version "$MC_VERSION")"
+  fi
 
+  MOD_LOADER_VERSION="$forge_version"
   log "Setting up Forge ${MC_VERSION}-${forge_version}..."
 
   local url
@@ -291,9 +298,11 @@ setup_neoforge() {
   local neoforge_version
   neoforge_version="$MOD_LOADER_VERSION"
 
-  [[ -n "$neoforge_version" && "$neoforge_version" != "latest" ]] \
-    || fail "NeoForge requires explicit MOD_LOADER_VERSION (example: 21.1.172)"
+  if [[ -z "$neoforge_version" || "$neoforge_version" == "latest" ]]; then
+    neoforge_version="$(get_neoforge_latest_version "$MC_VERSION" "$MOD_LOADER_VERSION")"
+  fi
 
+  MOD_LOADER_VERSION="$neoforge_version"
   log "Setting up NeoForge ${MC_VERSION}-${neoforge_version}..."
 
   local url

@@ -299,6 +299,141 @@ print(items[0]["loader"]["version"])
 ' || fail "Failed to fetch/parse Fabric loader versions for MC ${mc_version}"
 }
 
+
+get_forge_latest_version() {
+  local mc_version="${1:?mc_version required}"
+  local url="https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
+
+  curl -fsSL --connect-timeout 30 "$url" 2>/dev/null     | python3 -c '
+import json
+import sys
+
+mc = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception as e:
+    print(f"[MC-DOCKER] Forge promotions parse error: {e}", file=sys.stderr)
+    raise SystemExit(1)
+
+promos = data.get("promos", {})
+value = promos.get(f"{mc}-latest") or promos.get(f"{mc}-recommended")
+if not value:
+    raise SystemExit(1)
+
+print(value)
+' "$mc_version" || fail "Failed to fetch/parse Forge latest version for MC ${mc_version}"
+}
+
+neoforge_branch_for_mc_version() {
+  local mc_version="${1:?mc_version required}"
+  case "$mc_version" in
+    1.20.2)  printf '20.2
+' ;;
+    1.20.3|1.20.4) printf '20.4
+' ;;
+    1.20.5)  printf '20.5
+' ;;
+    1.20.6)  printf '20.6
+' ;;
+    1.21)    printf '21.0
+' ;;
+    1.21.1)  printf '21.1
+' ;;
+    1.21.2)  printf '21.2
+' ;;
+    1.21.3)  printf '21.3
+' ;;
+    1.21.4)  printf '21.4
+' ;;
+    1.21.5)  printf '21.5
+' ;;
+    1.21.6)  printf '21.6
+' ;;
+    1.21.7)  printf '21.7
+' ;;
+    1.21.8)  printf '21.8
+' ;;
+    1.21.9)  printf '21.9
+' ;;
+    1.21.10) printf '21.10
+' ;;
+    1.21.11) printf '21.11
+' ;;
+    26.1)    printf '26.1
+' ;;
+    *) return 1 ;;
+  esac
+}
+
+_select_latest_neoforge_version() {
+  local branch="${1:?branch required}"
+  python3 -c '
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+branch = sys.argv[1]
+raw = sys.stdin.read()
+versions = []
+
+try:
+    root = ET.fromstring(raw)
+    versions.extend([
+        (node.text or "").strip()
+        for node in root.findall(".//{*}version")
+        if (node.text or "").strip()
+    ])
+except Exception:
+    versions.extend(re.findall(r">((?:\d+\.)+\d+(?:-[A-Za-z0-9.]+)?)</a>", raw))
+    versions.extend(re.findall(r"href=\"((?:\d+\.)+\d+(?:-[A-Za-z0-9.]+)?)/\"", raw))
+
+pattern = re.compile(rf"^{re.escape(branch)}(?:[.-].+)?$")
+candidates = sorted(set(v for v in versions if pattern.match(v)))
+if not candidates:
+    raise SystemExit(1)
+
+qual_rank = {None: 3, "rc": 2, "beta": 1, "alpha": 0}
+
+def version_key(value: str):
+    m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)*)(?:-([A-Za-z]+)([0-9]+)?)?", value)
+    if not m:
+        return ((0,), -1, -1, value)
+    nums = tuple(int(x) for x in m.group(1).split("."))
+    qual = m.group(2).lower() if m.group(2) else None
+    qual_num = int(m.group(3) or 0)
+    return (nums, qual_rank.get(qual, 0), qual_num, value)
+
+print(max(candidates, key=version_key))
+' "$branch"
+}
+
+get_neoforge_latest_version() {
+  local mc_version="${1:?mc_version required}"
+  local hint="${2:-latest}"
+
+  if [[ -n "$hint" && "$hint" != "latest" ]]; then
+    printf '%s
+' "$hint"
+    return 0
+  fi
+
+  local branch
+  branch="$(neoforge_branch_for_mc_version "$mc_version")"     || fail "NeoForge does not support automatic version selection for MC ${mc_version}"
+
+  local metadata_url="https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
+  local listing_url="https://maven.neoforged.net/releases/net/neoforged/neoforge/"
+  local result
+
+  result="$(curl -fsSL --connect-timeout 30 "$metadata_url" 2>/dev/null | _select_latest_neoforge_version "$branch" 2>/dev/null || true)"
+  if [[ -z "$result" ]]; then
+    result="$(curl -fsSL --connect-timeout 30 "$listing_url" 2>/dev/null | _select_latest_neoforge_version "$branch" 2>/dev/null || true)"
+  fi
+
+  [[ -n "$result" ]] || fail "Failed to resolve latest NeoForge version for MC ${mc_version} (branch ${branch})"
+  printf '%s
+' "$result"
+}
+
 write_docker_server_properties() {
   local motd_safe
   motd_safe="$(sanitize_single_line "${MC_NAME:-$MC_ID}")"
