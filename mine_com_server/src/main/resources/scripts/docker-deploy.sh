@@ -56,6 +56,7 @@ HOST_GID="$(id -g)"
 SERVER_DATA_DIR="$(docker_server_data_dir "$MC_ID" "$STORAGE_TYPE")"
 RUNTIME_DIR="$(docker_runtime_dir "$MC_ID")"
 LOGS_DIR_MC="$(docker_logs_dir "$MC_ID")"
+UPLOADS_DIR="${MC_ROOT}/assets/${MC_ID}/uploads"
 CONTAINER_NAME="$(docker_container_name "$MC_ID")"
 
 if [[ -n "$BACKUP_PATH_OVERRIDE" ]]; then
@@ -166,6 +167,91 @@ assert_modloader_mc_version_artifacts() {
       fail "Installed server artifacts do not match expected Minecraft version ${expected}"
     fi
   fi
+}
+
+find_latest_uploaded_mods_archive() {
+  [[ -d "$UPLOADS_DIR" ]] || return 0
+
+  find "$UPLOADS_DIR" -maxdepth 1 -type f \( -name 'mods-*.zip' -o -name 'modpack-*.zip' \) -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr \
+    | head -n 1 \
+    | cut -d' ' -f2-
+}
+
+apply_uploaded_mods_archive() {
+  local archive
+  archive="$(find_latest_uploaded_mods_archive || true)"
+
+  if [[ -z "$archive" || ! -f "$archive" ]]; then
+    log "No uploaded mods archive found for ${MC_ID}"
+    return 0
+  fi
+
+  log "Applying uploaded mods archive: $archive"
+  rm -rf "$SERVER_DATA_DIR/mods"
+  mkdir -p "$SERVER_DATA_DIR/mods" "$UPLOADS_DIR/applied"
+
+  ARCHIVE_PATH="$archive" TARGET_DIR="$SERVER_DATA_DIR" python3 - <<'PY'
+import os
+import pathlib
+import shutil
+import zipfile
+
+IGNORED_PARTS = {"__MACOSX"}
+IGNORED_NAMES = {".ds_store", "thumbs.db"}
+
+archive_path = pathlib.Path(os.environ["ARCHIVE_PATH"]).resolve()
+target_dir = pathlib.Path(os.environ["TARGET_DIR"]).resolve()
+mods_dir = (target_dir / "mods").resolve()
+mods_dir.mkdir(parents=True, exist_ok=True)
+
+count = 0
+total_bytes = 0
+with zipfile.ZipFile(archive_path) as zf:
+    for info in zf.infolist():
+        original_name = (info.filename or "")
+        normalized_name = original_name.replace("\\", "/")
+        raw_name = normalized_name.strip("/")
+
+        if not raw_name:
+            continue
+        if info.is_dir() or normalized_name.endswith("/"):
+            continue
+
+        parts = [part for part in pathlib.PurePosixPath(raw_name).parts if part not in ("", ".")]
+        if not parts or any(part == ".." for part in parts):
+            raise SystemExit(f"Unsafe zip entry: {raw_name}")
+        if any(part in IGNORED_PARTS for part in parts):
+            continue
+        if parts[-1].lower() in IGNORED_NAMES:
+            continue
+
+        if "mods" in parts:
+            rel_parts = parts[parts.index("mods"):]
+            dest = target_dir.joinpath(*rel_parts)
+        else:
+            dest = mods_dir.joinpath(*parts)
+
+        dest = dest.resolve()
+        if target_dir != dest and target_dir not in dest.parents:
+            raise SystemExit(f"Zip entry escapes target dir: {raw_name}")
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info, "r") as src, open(dest, "wb") as dst:
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+        count += 1
+        total_bytes += info.file_size
+
+print(f"Extracted {count} file(s), {total_bytes} byte(s) from {archive_path.name}")
+PY
+
+  local archive_name archive_base applied_path
+  archive_name="$(basename "$archive")"
+  archive_base="${archive_name%.zip}"
+  applied_path="$UPLOADS_DIR/applied/${archive_base}.applied-$(date +%s).zip"
+
+  mv -f "$archive" "$applied_path"
+  log "Mods archive applied and moved to: $applied_path"
 }
 
 setup_paper() {
@@ -347,6 +433,8 @@ case "$MOD_LOADER" in
   neoforge) setup_neoforge ;;
   *)        fail "Unsupported loader: $MOD_LOADER. Supported: paper, fabric, forge, neoforge" ;;
 esac
+
+apply_uploaded_mods_archive
 
 chmod 755 "$SERVER_DATA_DIR/start-server.sh"
 finalize_server_dir_permissions

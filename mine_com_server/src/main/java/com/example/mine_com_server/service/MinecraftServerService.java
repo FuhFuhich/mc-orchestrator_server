@@ -18,6 +18,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -69,14 +70,18 @@ public class MinecraftServerService {
             throw new IllegalStateException("Порт уже используется на этой ноде");
         }
 
+        String normalizedModLoader = normalize(request.getModLoader(), "paper");
+        String normalizedDeployTarget = normalize(request.getDeployTarget(), "screen");
+        String initialStatus = "docker".equalsIgnoreCase(normalizedDeployTarget) ? "undeployed" : "offline";
+
         MinecraftServer mc = MinecraftServer.builder()
                 .node(node)
                 .name(request.getName().trim())
                 .minecraftVersion(request.getMinecraftVersion().trim())
-                .modLoader(normalize(request.getModLoader(), "paper"))
+                .modLoader(normalizedModLoader)
                 .modLoaderVersion(blankToNull(request.getModLoaderVersion()))
-                .deployTarget(normalize(request.getDeployTarget(), "screen"))
-                .status("offline")
+                .deployTarget(normalizedDeployTarget)
+                .status(initialStatus)
                 .gamePort(orDefault(request.getGamePort(), 25565))
                 .allocateAllResources(orDefault(request.getAllocateAllResources(), false))
                 .ramMb(orDefault(request.getRamMb(), 2048))
@@ -156,6 +161,7 @@ public class MinecraftServerService {
 
         try {
             if (mc.isDockerMode()) {
+                dockerDeployService.ensureDockerNodePrepared(mc.getNode());
                 sshService.runScript(mc.getNode(), remoteConfig.rootFor(mc.getNode()),
                         remoteConfig.scriptPath(mc.getNode(), "docker-start.sh"), mc.getId().toString());
             } else {
@@ -171,7 +177,7 @@ public class MinecraftServerService {
             log.warn("[START] Запуск {} отложен: {}", mc.getName(), e.getMessage());
         } catch (Exception e) {
             mc = findOrThrow(id);
-            mc.setStatus("error");
+            mc.setStatus(resolveLifecycleErrorStatus(mc, e));
             log.error("[START] Ошибка запуска {}: {}", mc.getName(), e.getMessage(), e);
         }
 
@@ -209,6 +215,7 @@ public class MinecraftServerService {
 
         try {
             if (mc.isDockerMode()) {
+                dockerDeployService.ensureDockerNodePrepared(mc.getNode());
                 sshService.runScript(mc.getNode(), remoteConfig.rootFor(mc.getNode()),
                         remoteConfig.scriptPath(mc.getNode(), "docker-restart.sh"), mc.getId().toString());
             } else {
@@ -224,7 +231,7 @@ public class MinecraftServerService {
             log.warn("[RESTART] Рестарт {} отложен: {}", mc.getName(), e.getMessage());
         } catch (Exception e) {
             mc = findOrThrow(id);
-            mc.setStatus("error");
+            mc.setStatus(resolveLifecycleErrorStatus(mc, e));
             log.error("[RESTART] Ошибка рестарта {}: {}", mc.getName(), e.getMessage(), e);
         }
 
@@ -351,21 +358,19 @@ public class MinecraftServerService {
         MinecraftServer mc = findOrThrow(id);
         validateArchive(file);
 
-        String normalizedType = normalize(type, "modpack");
-        String safeType = switch (normalizedType) {
-            case "mods", "plugins", "world", "modpack" -> normalizedType;
-            default -> throw new IllegalArgumentException("Допустимые типы архива: modpack, mods, plugins, world");
-        };
+        String safeType = normalizeArchiveType(type, file);
 
         String remoteDir  = remoteConfig.assetsDir(mc.getNode()) + "/" + mc.getId() + "/uploads";
         String remoteFile = remoteDir + "/" + safeType + "-" + System.currentTimeMillis() + ".zip";
 
         try {
             sshService.execute(mc.getNode(), "mkdir -p " + sshService.quote(remoteDir));
-            sshService.uploadBytes(mc.getNode(), file.getBytes(), remoteFile);
+            try (InputStream inputStream = file.getInputStream()) {
+                sshService.uploadStream(mc.getNode(), inputStream, remoteFile);
+            }
             return remoteFile;
         } catch (IOException e) {
-            throw new IllegalStateException("Не удалось прочитать архив: " + e.getMessage(), e);
+            throw new IllegalStateException("Не удалось загрузить архив: " + e.getMessage(), e);
         }
     }
 
@@ -461,6 +466,7 @@ public class MinecraftServerService {
 
     private void stopSync(MinecraftServer mc) {
         if (mc.isDockerMode()) {
+            dockerDeployService.ensureDockerNodePrepared(mc.getNode());
             sshService.runScript(mc.getNode(), remoteConfig.rootFor(mc.getNode()),
                     remoteConfig.scriptPath(mc.getNode(), "docker-stop.sh"), mc.getId().toString());
         } else {
@@ -471,12 +477,33 @@ public class MinecraftServerService {
 
     private void runCleanupScript(MinecraftServer mc, Server node) {
         if (mc.isDockerMode()) {
+            dockerDeployService.ensureDockerNodePrepared(node);
             sshService.runScript(node, remoteConfig.rootFor(node),
                     remoteConfig.scriptPath(node, "docker-cleanup.sh"), mc.getId().toString());
         } else {
             sshService.runScript(node, remoteConfig.rootFor(node),
                     remoteConfig.scriptPath(node, "cleanup.sh"), mc.getId().toString());
         }
+    }
+
+    private String resolveLifecycleErrorStatus(MinecraftServer mc, Exception e) {
+        if (mc != null && mc.isDockerMode() && isUndeployedDockerState(e)) {
+            return "undeployed";
+        }
+        return "error";
+    }
+
+    private boolean isUndeployedDockerState(Exception e) {
+        String message = e == null ? null : e.getMessage();
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return normalized.contains("run deploy first")
+                || normalized.contains("container '") && normalized.contains("not found")
+                || normalized.contains("container did not enter running state")
+                || normalized.contains("docker-start.sh") && normalized.contains("нет такого файла")
+                || normalized.contains("docker-start.sh") && normalized.contains("no such file");
     }
 
     private void awaitDeploymentReady(MinecraftServer mc, Duration timeout) {
@@ -546,6 +573,54 @@ public class MinecraftServerService {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("Архив не передан");
         String fn = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
         if (!fn.endsWith(".zip")) throw new IllegalArgumentException("Поддерживаются только ZIP архивы");
+    }
+
+    private String normalizeArchiveType(String rawType, MultipartFile file) {
+        String candidate = normalizeArchiveTypeToken(rawType);
+        if (candidate != null) {
+            return candidate;
+        }
+
+        String originalFilename = file != null ? file.getOriginalFilename() : null;
+        candidate = normalizeArchiveTypeToken(originalFilename);
+        if (candidate != null) {
+            return candidate;
+        }
+
+        throw new IllegalArgumentException("Допустимые типы архива: modpack, mods, plugins, world");
+    }
+
+    private String normalizeArchiveTypeToken(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+
+        String prepared = raw.trim().toLowerCase(Locale.ROOT)
+                .replace('\\', '/')
+                .replace("?", "/")
+                .replace("&", "/")
+                .replace("=", "/")
+                .replace(",", "/")
+                .replace(";", "/");
+
+        for (String part : prepared.split("/")) {
+            String token = part == null ? "" : part.trim();
+            if (token.isEmpty()) {
+                continue;
+            }
+            if (token.endsWith(".zip")) {
+                token = token.substring(0, token.length() - 4);
+            }
+            token = token.replaceAll("[^a-z]", "");
+            switch (token) {
+                case "mods", "plugins", "world", "modpack":
+                    return token;
+                default:
+                    break;
+            }
+        }
+
+        return null;
     }
 
     private String sanitizeConsoleCommand(String command) {

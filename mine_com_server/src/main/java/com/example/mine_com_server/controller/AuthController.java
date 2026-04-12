@@ -31,7 +31,7 @@ public class AuthController {
             @RequestBody @Valid RegisterRequest request,
             HttpServletRequest httpRequest
     ) {
-        rateLimitService.checkRegister(getClientIp(httpRequest));
+        //rateLimitService.checkRegister(getClientIp(httpRequest));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(authService.register(request));
     }
@@ -41,7 +41,7 @@ public class AuthController {
             @RequestBody @Valid LoginRequest request,
             HttpServletRequest httpRequest
     ) {
-        rateLimitService.checkLogin(getClientIp(httpRequest));
+        //rateLimitService.checkLogin(getClientIp(httpRequest));
         return ResponseEntity.ok(authService.login(request));
     }
 

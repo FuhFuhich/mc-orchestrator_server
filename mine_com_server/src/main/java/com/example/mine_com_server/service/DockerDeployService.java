@@ -51,7 +51,7 @@ public class DockerDeployService {
 
         setStatus(mc.getId(), "deploying");
         try {
-            prepareDockerNode(node);
+            ensureDockerNodePrepared(node);
 
             String containerName = dockerContainerName(mc.getId());
 
@@ -107,7 +107,7 @@ public class DockerDeployService {
 
         setStatus(mc.getId(), "stopping");
         try {
-            prepareDockerNode(node);
+            ensureDockerNodePrepared(node);
             sshService.runScript(node, remoteConfig.rootFor(node),
                     remoteConfig.scriptPath(node, "docker-cleanup.sh"), mc.getId().toString());
 
@@ -122,6 +122,14 @@ public class DockerDeployService {
             setStatus(mc.getId(), "error");
             log.error("[DOCKER-UNDEPLOY] Ошибка cleanup {}: {}", mc.getId(), e.getMessage(), e);
             throw new RuntimeException("Ошибка Docker-undeploy: " + e.getMessage(), e);
+        }
+    }
+
+    public void ensureDockerNodePrepared(Server node) {
+        try {
+            prepareDockerNode(node);
+        } catch (IOException e) {
+            throw new IllegalStateException("Не удалось подготовить Docker-ноду: " + e.getMessage(), e);
         }
     }
 

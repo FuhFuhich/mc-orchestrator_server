@@ -11,6 +11,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -166,13 +167,30 @@ public class SshService {
     }
 
     public void uploadFile(Server server, String localPath, String remotePath) {
+        try (InputStream inputStream = new BufferedInputStream(Files.newInputStream(Path.of(localPath)), 1024 * 1024)) {
+            uploadStream(server, inputStream, remotePath);
+        } catch (IOException e) {
+            throw new SshException("Ошибка чтения локального файла перед SFTP-загрузкой: " + e.getMessage(), e);
+        }
+    }
+
+    public void uploadStream(Server server, InputStream inputStream, String remotePath) {
         ChannelSftp channel = null;
         try {
+            Objects.requireNonNull(inputStream, "inputStream");
             Session session = getOrCreateSession(server);
             channel = (ChannelSftp) session.openChannel("sftp");
             channel.connect(TIMEOUT_MS);
-            ensureRemoteDir(channel, remotePath.substring(0, remotePath.lastIndexOf('/')));
-            channel.put(localPath, remotePath, ChannelSftp.OVERWRITE);
+            channel.setBulkRequests(256);
+
+            int slashIndex = remotePath.lastIndexOf('/');
+            if (slashIndex > 0) {
+                ensureRemoteDir(channel, remotePath.substring(0, slashIndex));
+            }
+
+            try (InputStream buffered = new BufferedInputStream(inputStream, 1024 * 1024)) {
+                channel.put(buffered, remotePath, ChannelSftp.OVERWRITE);
+            }
         } catch (Exception e) {
             sessionCache.remove(server.getId());
             throw new SshException("Ошибка SFTP: " + e.getMessage(), e);

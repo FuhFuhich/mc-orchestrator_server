@@ -7,8 +7,10 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.time.LocalDateTime;
 import java.util.stream.Collectors;
@@ -60,6 +62,21 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleSsh(SshException ex) {
         log.error("[SSH] {}", ex.getMessage());
         return build(HttpStatus.BAD_GATEWAY, "Ошибка SSH: " + ex.getMessage());
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponse> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+        return build(HttpStatus.PAYLOAD_TOO_LARGE,
+                "Размер архива превышает допустимый лимит сервера. Увеличьте лимит multipart/request size.");
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ErrorResponse> handleMultipart(MultipartException ex) {
+        log.error("[MULTIPART] {}", ex.getMessage(), ex);
+        return build(HttpStatus.BAD_REQUEST,
+                "Ошибка загрузки multipart-архива: " + (ex.getMostSpecificCause() != null
+                        ? ex.getMostSpecificCause().getMessage()
+                        : ex.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)
