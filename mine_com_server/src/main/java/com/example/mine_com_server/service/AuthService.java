@@ -8,6 +8,7 @@ import com.example.mine_com_server.dto.response.AuthResponse;
 import com.example.mine_com_server.dto.response.UserResponse;
 import com.example.mine_com_server.exception.ForbiddenException;
 import com.example.mine_com_server.exception.NotFoundException;
+import org.springframework.security.authentication.BadCredentialsException;
 import com.example.mine_com_server.model.RefreshToken;
 import com.example.mine_com_server.model.User;
 import com.example.mine_com_server.repository.UserRepository;
@@ -38,17 +39,17 @@ public class AuthService {
         if (request.getEmail() != null
                 && !request.getEmail().isBlank()
                 && userRepository.existsByEmail(request.getEmail())) {
-            throw new IllegalStateException("Email " + request.getEmail());
+            throw new IllegalStateException("Email уже зарегистрирован");
         }
 
         if (request.getPhoneNumber() != null
                 && !request.getPhoneNumber().isBlank()
                 && userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
-            throw new IllegalStateException(request.getPhoneNumber());
+            throw new IllegalStateException("Номер телефона уже зарегистрирован");
         }
 
         if (userRepository.existsByUsername(request.getUsername())) {
-            throw new IllegalStateException(request.getUsername());
+            throw new IllegalStateException("Имя пользователя уже занято");
         }
 
         User user = User.builder()
@@ -73,7 +74,7 @@ public class AuthService {
         User user = userRepository.findByEmail(identity)
                 .or(() -> userRepository.findByUsername(identity))
                 .or(() -> userRepository.findByPhoneNumber(identity))
-                .orElseThrow(() -> new NotFoundException("User not found: " + identity));
+                .orElseThrow(() -> new BadCredentialsException("Неверный логин или пароль"));
 
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
@@ -119,14 +120,14 @@ public class AuthService {
 
         if (request.getUsername() != null && !request.getUsername().equals(user.getUsername())) {
             if (userRepository.existsByUsername(request.getUsername())) {
-                throw new IllegalStateException();
+                throw new IllegalStateException("Имя пользователя уже занято");
             }
             user.setUsername(request.getUsername());
         }
 
         if (request.getEmail() != null && !request.getEmail().equals(user.getEmail())) {
             if (userRepository.existsByEmail(request.getEmail())) {
-                throw new IllegalStateException("Email");
+                throw new IllegalStateException("Email уже используется");
             }
             user.setEmail(request.getEmail());
         }

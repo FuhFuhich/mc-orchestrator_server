@@ -1,30 +1,39 @@
-
-version: "3.9"
+name: mc-orchestrator
 
 services:
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PostgreSQL
+  # ═══════════════════════════════════════════════════════════════════════════
   postgres:
     image: postgres:16-alpine
     container_name: mc-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB:       mc_orchestrator
-      POSTGRES_USER:     postgres
-      POSTGRES_PASSWORD: "${DB_PASSWORD:-postgres_change_me}"
+      POSTGRES_DB:       "${DB_NAME:-mc_orchestrator}"
+      POSTGRES_USER:     "${DB_USER:-postgres}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD must be set in .env}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Postgres is NOT exposed to the host by default — only the backend
+    # container talks to it over the internal Docker network.
+    expose:
+      - "5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d mc_orchestrator"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-mc_orchestrator}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks: [mc-net]
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Spring Boot backend
+  # ═══════════════════════════════════════════════════════════════════════════
   app:
     build:
       context: ./mine_com_server
       dockerfile: Dockerfile
+    image: mc-orchestrator/app:latest
     container_name: mc-app
     restart: unless-stopped
     depends_on:
@@ -33,31 +42,105 @@ services:
     environment:
       SERVER_PORT: 8080
 
-      DB_URL:      "jdbc:postgresql://postgres:5432/mc_orchestrator"
-      DB_USER:     postgres
-      DB_PASSWORD: "${DB_PASSWORD:-postgres_change_me}"
-
-      APP_JWT_SECRET:           "${APP_JWT_SECRET:-change_me_in_production_min_32_chars}"
-      APP_JWT_EXPIRATION_MS:    "${APP_JWT_EXPIRATION_MS:-86400000}"
-      APP_REFRESH_TOKEN_EXPIRATION_DAYS: "${APP_REFRESH_TOKEN_DAYS:-30}"
-
-      APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY:-zlpYkmFbqynDO6g5G0879oLxEejBcKRQ}"
-
+      DB_URL:      "jdbc:postgresql://postgres:5432/${DB_NAME:-mc_orchestrator}"
+      DB_USER:     "${DB_USER:-postgres}"
+      DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD must be set in .env}"
       JPA_DDL_AUTO: "${JPA_DDL_AUTO:-update}"
 
-      APP_CORS_ALLOWED_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+      APP_JWT_SECRET:                    "${APP_JWT_SECRET:?APP_JWT_SECRET must be set in .env}"
+      APP_JWT_EXPIRATION_MS:             "${APP_JWT_EXPIRATION_MS:-86400000}"
+      APP_REFRESH_TOKEN_EXPIRATION_DAYS: "${APP_REFRESH_TOKEN_DAYS:-30}"
+      APP_ENCRYPTION_KEY:                "${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY must be exactly 32 chars}"
 
-      JAVA_OPTS: "-XX:+UseG1GC -XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
-    ports:
-      - "${APP_PORT:-8080}:8080"
+      APP_CORS_ALLOWED_ORIGINS: "${APP_CORS_ALLOWED_ORIGINS:-https://mc-orchestrator.xyz,https://www.mc-orchestrator.xyz,http://localhost:5500}"
+
+      APP_REMOTE_ROOT:            "${APP_REMOTE_ROOT:-/opt/mc-com}"
+      APP_REMOTE_DOCKER_RAM_PATH: "${APP_REMOTE_DOCKER_RAM_PATH:-/dev/shm/mc-com/servers}"
+
+      # If you need VM-mode deploys from this containerised backend, bind-mount
+      # your bundles dir into the container and point this env var at it.
+      APP_SERVER_DIST_ROOT: "${APP_SERVER_DIST_ROOT:-}"
+
+      APP_LOG_LEVEL: "${APP_LOG_LEVEL:-INFO}"
+      JAVA_OPTS:     "-XX:+UseG1GC -XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
+    # Only expose internally — nginx fronts the backend on ports 80/443.
+    expose:
+      - "8080"
     volumes:
       - app_uploads:/app/uploads
+      # Optional: bind-mount bundles from the host if you need VM-mode.
+      # - ./mine_com_server/src/main/resources/server-dist:/app/server-dist:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
+    networks: [mc-net]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Static web frontend — nginx serving mc-orchestrator_web/
+  # ═══════════════════════════════════════════════════════════════════════════
+  web:
+    image: nginx:alpine
+    container_name: mc-web
+    restart: unless-stopped
+    # Absolute host path to the web app. Override via WEB_ROOT in .env if you
+    # keep the frontend somewhere else (default assumes it sits next to this
+    # repo as ../mine_com_web/mc-orchestrator_web).
+    volumes:
+      - "${WEB_ROOT:-../mine_com_web/mc-orchestrator_web}:/usr/share/nginx/html:ro"
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    expose:
+      - "80"
+    networks: [mc-net]
+    depends_on:
+      - app
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Public-facing nginx reverse proxy — terminates TLS + proxies /api /ws /
+  # ═══════════════════════════════════════════════════════════════════════════
+  proxy:
+    image: nginx:alpine
+    container_name: mc-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # PROXY_CONF defaults to the bootstrap HTTP-only config, so the stack
+      # starts cleanly even before a Let's Encrypt cert has been issued.
+      # After certbot succeeds, set PROXY_CONF=./nginx/proxy.conf in .env and
+      # `docker compose up -d proxy` to activate HTTPS.
+      - "${PROXY_CONF:-./nginx/proxy-bootstrap.conf}:/etc/nginx/conf.d/default.conf:ro"
+      - ./nginx/certbot-webroot:/var/www/certbot:ro
+      - ./nginx/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - app
+      - web
+    networks: [mc-net]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # certbot — one-shot TLS issuer / renewer.
+  # Run manually with:  docker compose run --rm certbot
+  # ═══════════════════════════════════════════════════════════════════════════
+  certbot:
+    image: certbot/certbot:latest
+    container_name: mc-certbot
+    volumes:
+      - ./nginx/letsencrypt:/etc/letsencrypt
+      - ./nginx/certbot-webroot:/var/www/certbot
+    entrypoint: ""
+    command: >-
+      certbot certonly --webroot -w /var/www/certbot
+      --non-interactive --agree-tos
+      -m ${CERTBOT_EMAIL:-admin@mc-orchestrator.xyz}
+      -d ${PUBLIC_DOMAIN:-mc-orchestrator.xyz}
+      -d www.${PUBLIC_DOMAIN:-mc-orchestrator.xyz}
+
+networks:
+  mc-net:
+    driver: bridge
 
 volumes:
   postgres_data:

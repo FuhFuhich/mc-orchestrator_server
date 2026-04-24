@@ -51,7 +51,7 @@ public class SshService {
         return session;
     }
 
-    private Session getOrCreateSession(Server server) throws JSchException {
+    private synchronized Session getOrCreateSession(Server server) throws JSchException {
         Session cached = sessionCache.get(server.getId());
         if (cached != null && cached.isConnected()) {
             return cached;
@@ -140,7 +140,9 @@ public class SshService {
             streamChannels.put(streamKey, channel);
             BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
             String line;
-            while ((line = reader.readLine()) != null && channel.isConnected()) {
+            while ((line = reader.readLine()) != null
+                    && channel.isConnected()
+                    && !Thread.currentThread().isInterrupted()) {
                 lineConsumer.accept(line);
             }
         } catch (Exception e) {
@@ -202,21 +204,7 @@ public class SshService {
     }
 
     public void uploadBytes(Server server, byte[] bytes, String remotePath) {
-        Path tmp = null;
-        try {
-            tmp = Files.createTempFile("mc-upload-", ".bin");
-            Files.write(tmp, bytes);
-            uploadFile(server, tmp.toString(), remotePath);
-        } catch (IOException e) {
-            throw new SshException("Ошибка подготовки файла к загрузке: " + e.getMessage(), e);
-        } finally {
-            if (tmp != null) {
-                try {
-                    Files.deleteIfExists(tmp);
-                } catch (IOException ignored) {
-                }
-            }
-        }
+        uploadStream(server, new ByteArrayInputStream(bytes), remotePath);
     }
 
     public byte[] downloadFile(Server server, String remotePath) {
@@ -302,33 +290,8 @@ public class SshService {
         }
     }
 
-    private String readFully(InputStream in, ChannelExec channel) throws IOException, InterruptedException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buffer = new byte[4096];
-
-        while (true) {
-            while (in.available() > 0) {
-                int read = in.read(buffer, 0, buffer.length);
-                if (read < 0) {
-                    break;
-                }
-                out.write(buffer, 0, read);
-            }
-
-            if (channel.isClosed()) {
-                while (in.available() > 0) {
-                    int read = in.read(buffer, 0, buffer.length);
-                    if (read < 0) {
-                        break;
-                    }
-                    out.write(buffer, 0, read);
-                }
-                break;
-            }
-            Thread.sleep(50L);
-        }
-
-        return out.toString(StandardCharsets.UTF_8);
+    private String readFully(InputStream in, ChannelExec channel) throws IOException {
+        return new String(in.readAllBytes(), StandardCharsets.UTF_8);
     }
 
     private String buildExitMessage(String command, int exitCode, String stdout, String stderr) {

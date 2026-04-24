@@ -17,8 +17,11 @@ public class EncryptionConfig {
     @Bean
     public SecretKey aesSecretKey() {
         byte[] keyBytes = encryptionKey.getBytes(StandardCharsets.UTF_8);
-        byte[] key = new byte[32];
-        System.arraycopy(keyBytes, 0, key, 0, Math.min(keyBytes.length, 32));
-        return new SecretKeySpec(key, "AES");
+        if (keyBytes.length != 32) {
+            throw new IllegalStateException(
+                    "APP_ENCRYPTION_KEY должен быть ровно 32 байта (символа) для AES-256, фактически: "
+                            + keyBytes.length);
+        }
+        return new SecretKeySpec(keyBytes, "AES");
     }
 }

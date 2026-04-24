@@ -78,8 +78,12 @@ public class AvatarService {
     private void _deleteOldAvatar(String avatarUrl) {
         try {
             String filename = avatarUrl.substring(avatarUrl.lastIndexOf('/') + 1);
-            Path old = UPLOAD_DIR.resolve(filename);
-            Files.deleteIfExists(old);
+            Path resolved = UPLOAD_DIR.resolve(filename).normalize();
+            if (!resolved.startsWith(UPLOAD_DIR.normalize())) {
+                log.warn("[AVATAR] Попытка path traversal при удалении аватара: {}", filename);
+                return;
+            }
+            Files.deleteIfExists(resolved);
         } catch (Exception e) {
             log.warn("[AVATAR] Не удалось удалить старый аватар: {}", e.getMessage());
         }

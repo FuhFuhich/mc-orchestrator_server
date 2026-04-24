@@ -10,12 +10,15 @@ import com.example.mine_com_server.repository.MetricsRepository;
 import com.example.mine_com_server.repository.MinecraftServerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -44,7 +47,12 @@ public class MetricsService {
     private final RemoteConfig remoteConfig;
     private final RconService rconService;
 
-    @Transactional
+    // Self-injection via @Lazy to route collectForServer() through the AOP proxy
+    // (avoids self-invocation proxy bypass for @Transactional)
+    @Autowired @Lazy
+    private MetricsService self;
+
+    @Transactional(readOnly = true)
     @Scheduled(fixedDelay = 30_000)
     public void collectAll() {
         List<MinecraftServer> activeServers = mcServerRepository.findAllByStatus("online");
@@ -52,17 +60,21 @@ public class MetricsService {
             return;
         }
 
+        // Force-initialize node associations while still inside the read-only transaction
+        // so that the detached entities remain usable in each per-server write transaction below
+        activeServers.forEach(mc -> mc.getNode().getId());
+
         log.debug("[METRICS] Сбор метрик для {} серверов", activeServers.size());
         activeServers.forEach(mc -> {
             try {
-                collectForServer(mc);
+                self.collectForServer(mc);
             } catch (Exception e) {
                 log.warn("[METRICS] Ошибка сбора для {}: {}", mc.getName(), e.getMessage());
             }
         });
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public MetricsResponse collectForServer(MinecraftServer mc) {
         RuntimeSnapshot snapshot = captureRuntime(mc);
 

@@ -1,0 +1,25 @@
+.git
+.gitignore
+.gitattributes
+.idea
+.gradle
+.vscode
+build
+out
+uploads
+*.iml
+HELP.md
+
+# Optional bundle mount — huge files, not needed for Docker-mode MC servers.
+# If you deploy VM-mode MC servers from a Docker-deployed backend, bind-mount
+# the bundles directory externally (see docker-compose).
+src/main/resources/server-dist
+
+# Tests aren't needed in the image.
+src/test
+
+# IDE / OS crap
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

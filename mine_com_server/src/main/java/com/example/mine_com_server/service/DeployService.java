@@ -7,7 +7,9 @@ import com.example.mine_com_server.model.Server;
 import com.example.mine_com_server.repository.MinecraftServerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -43,6 +45,15 @@ public class DeployService {
     private final MinecraftServerRepository mcServerRepository;
     private final SshService sshService;
     private final RemoteConfig remoteConfig;
+
+    /**
+     * Optional filesystem directory holding pre-built VM-mode bundles.
+     * When set (e.g. {@code /app/server-dist}), bundles are loaded from there
+     * instead of the classpath — used in Docker deployments where bundles are
+     * bind-mounted as a volume rather than embedded in the JAR.
+     */
+    @Value("${app.server-dist.root:}")
+    private String serverDistRoot;
 
     @Async("mc-async-")
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -143,9 +154,10 @@ public class DeployService {
 
         String resourcePath = resolveBundleResourcePath(loader, mc.getMinecraftVersion(),
                 nvl(mc.getModLoaderVersion(), "latest"));
-        Resource resource = new ClassPathResource(resourcePath);
+        Resource resource = loadBundleResource(resourcePath);
         if (!resource.exists()) {
-            throw new IOException("Bundle не найден в resources: " + resourcePath);
+            throw new IOException("Bundle не найден: " + resourcePath +
+                    " (classpath и " + (serverDistRoot == null ? "<app.server-dist.root не задан>" : serverDistRoot) + ")");
         }
 
         String remotePath = resolveRemoteBundlePath(node, loader, mc.getMinecraftVersion(),
@@ -160,6 +172,24 @@ public class DeployService {
         } finally {
             Files.deleteIfExists(tmpFile);
         }
+    }
+
+    /**
+     * Loads a bundle resource.
+     * <p>If {@code app.server-dist.root} is configured and the file exists there,
+     * prefer the filesystem version. Otherwise fall back to the classpath.
+     */
+    private Resource loadBundleResource(String resourcePath) {
+        if (serverDistRoot != null && !serverDistRoot.isBlank()) {
+            // resourcePath looks like "server-dist/bundles/paper/paper-1.20.4.tar.gz"
+            // We strip the leading "server-dist/" to join with the configured root.
+            String relative = resourcePath.startsWith("server-dist/")
+                    ? resourcePath.substring("server-dist/".length())
+                    : resourcePath;
+            Resource fs = new FileSystemResource(serverDistRoot + "/" + relative);
+            if (fs.exists()) return fs;
+        }
+        return new ClassPathResource(resourcePath);
     }
 
     private String resolveBundleResourcePath(String loader, String mc, String lv) {

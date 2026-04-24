@@ -1,4 +1,14 @@
-mine_com_server/scr/main/resources/server-dist/bundles/*
+# Bundles are large — don't track them in git.
+mine_com_server/src/main/resources/server-dist/bundles/*
+
+# Secrets — NEVER commit.
+.env
+.env.local
+.env.*.local
+
+# Let's Encrypt live certs / challenges.
+nginx/letsencrypt/
+nginx/certbot-webroot/
 
 # Compiled class file
 *.class
@@ -12,7 +22,7 @@ mine_com_server/scr/main/resources/server-dist/bundles/*
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
-# Package Files #
+# Package Files
 *.jar
 *.war
 *.nar
@@ -21,6 +31,12 @@ mine_com_server/scr/main/resources/server-dist/bundles/*
 *.tar.gz
 *.rar
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+# JVM crash logs
 hs_err_pid*
 replay_pid*
+
+# OS / IDE
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

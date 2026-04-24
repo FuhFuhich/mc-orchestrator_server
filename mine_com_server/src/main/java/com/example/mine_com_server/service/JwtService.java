@@ -4,6 +4,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
@@ -22,13 +23,24 @@ public class JwtService {
     @Value("${app.jwt.expiration-ms}")
     private long expirationMs;
 
+    private SecretKey cachedKey;
+
+    @PostConstruct
+    private void init() {
+        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+        if (keyBytes.length < 32) {
+            throw new IllegalStateException("JWT secret должен быть минимум 32 байта для HS256");
+        }
+        this.cachedKey = Keys.hmacShaKeyFor(keyBytes);
+    }
+
     public String generateToken(UUID userId) {
         return Jwts.builder()
                 .subject(userId.toString())
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationMs))
                 .claim("type", "access")
-                .signWith(getKey())
+                .signWith(cachedKey)
                 .compact();
     }
 
@@ -39,7 +51,7 @@ public class JwtService {
                 .expiration(new Date(System.currentTimeMillis() + ttlMs))
                 .claim("type", "mods_share")
                 .claim("mcServerId", mcServerId.toString())
-                .signWith(getKey())
+                .signWith(cachedKey)
                 .compact();
     }
 
@@ -75,17 +87,9 @@ public class JwtService {
 
     public Claims extractClaims(String token) {
         return Jwts.parser()
-                .verifyWith(getKey())
+                .verifyWith(cachedKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
-    }
-
-    private SecretKey getKey() {
-        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
-        if (keyBytes.length < 32) {
-            throw new IllegalStateException("JWT secret должен быть минимум 32 байта для HS256");
-        }
-        return Keys.hmacShaKeyFor(keyBytes);
     }
 }

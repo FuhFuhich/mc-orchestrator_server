@@ -80,10 +80,16 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
 
-        config.setAllowedOriginPatterns(List.of(
-                "http://localhost:*",
-                "http://127.0.0.1:*"
-        ));
+        List<String> patterns = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toList());
+
+        if (patterns.isEmpty()) {
+            patterns = List.of("http://localhost:*", "http://127.0.0.1:*");
+        }
+
+        config.setAllowedOriginPatterns(patterns);
 
         config.setAllowedMethods(List.of(
                 "GET",
